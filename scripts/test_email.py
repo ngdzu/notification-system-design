@@ -54,8 +54,14 @@ Happy reading!
     ]
 
     if shutil.which("mermaid-filter"):
-        cmd.extend(["--filter", "mermaid-filter"])
+        filter_cmd = list(cmd) + ["--filter", "mermaid-filter"]
         print("Enabling mermaid-filter for rendering test diagram...")
+        try:
+            subprocess.run(filter_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            print(f"Created sample test EPUB at {output_path}")
+            return
+        except subprocess.CalledProcessError as e:
+            print(f"[WARNING] mermaid-filter failed: {e.stderr.decode('utf-8').strip()}\nFalling back to standard pandoc conversion without mermaid diagrams...")
 
     try:
         subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)

@@ -20,7 +20,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y pandoc chromium-browser
-          npm install -g mermaid-filter
+          npm install -g @mermaid-js/mermaid-cli mermaid-filter
 
       - name: Send Test Email
         env:
