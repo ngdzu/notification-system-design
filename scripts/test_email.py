@@ -21,6 +21,7 @@ from email.mime.text import MIMEText
 from email import encoders
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+os.environ["MERMAID_FILTER_PUPPETEER_CONFIG"] = os.path.join(REPO_ROOT, "puppeteer-config.json")
 
 
 def create_sample_epub(output_path):
@@ -102,7 +103,14 @@ def send_test_email(recipient, smtp_user, smtp_pass, smtp_server, smtp_port):
 def main():
     parser = argparse.ArgumentParser(description="Test SMTP email delivery.")
     parser.add_argument("--to", help="Recipient email address")
+    parser.add_argument("--dry-run", action="store_true", help="Only verify EPUB generation and diagram rendering without sending email")
     args = parser.parse_args()
+
+    if args.dry_run:
+        print("Running in dry-run mode. Verifying EPUB creation and Mermaid diagram rendering...")
+        create_sample_epub("/tmp/test_sample.epub")
+        print("✅ SUCCESS: Dry run complete! EPUB and Mermaid diagram rendering verified.")
+        return
 
     smtp_user = os.environ.get("SMTP_USER")
     smtp_pass = os.environ.get("SMTP_PASS")

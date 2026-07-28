@@ -29,6 +29,7 @@ from email.mime.text import MIMEText
 from email import encoders
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+os.environ["MERMAID_FILTER_PUPPETEER_CONFIG"] = os.path.join(REPO_ROOT, "puppeteer-config.json")
 STATE_FILE = os.path.join(REPO_ROOT, ".kindle_state.json")
 LESSONS_DIR = os.path.join(REPO_ROOT, "lessons")
 PLAN_FILE = os.path.join(REPO_ROOT, ".plan", "plan.md")
