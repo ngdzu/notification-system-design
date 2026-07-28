@@ -1,9 +1,13 @@
 {
-  "last_sent_lesson": 1,
+  "last_sent_lesson": 2,
   "sent_history": [
     {
       "num": 1,
       "slug": "01-push-vs-pull-vs-poll"
+    },
+    {
+      "num": 2,
+      "slug": "02-high-level-architecture"
     }
   ]
 }
