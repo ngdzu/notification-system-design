@@ -1,0 +1,399 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Appendix A — Anatomy of a Connection (interactive)</title>
+<link rel="stylesheet" href="../assets/course.css" />
+<script defer src="../assets/diagrams.js"></script>
+<style>
+  /* demo viewBoxes are sized ~1 unit : 1 rendered px (doc column ≈ 690) */
+  .hop-dot { --travel: 242px; animation: push-dot 2.6s linear infinite; }
+  .s8 { font-size: 8px; }
+  .btns { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+  .btns button {
+    font-family: var(--mono); font-size: 11.5px; padding: 6px 12px; cursor: pointer;
+    background: var(--surface-2); color: var(--text); border: 1px solid var(--line); border-radius: 8px;
+  }
+  .btns button:hover { border-color: var(--dim); }
+  #killDot { transition: transform 0.7s linear, opacity 0.2s; }
+  .deepdive {
+    font-family: var(--mono); font-size: 11px; color: var(--dim);
+    margin: 6px 0 18px; padding-left: 14px; border-left: 2px solid var(--line);
+  }
+  .deepdive a { color: var(--cyan); text-decoration: none; border-bottom: 1px dotted var(--cyan); }
+  .deepdive a:hover { border-bottom-style: solid; }
+</style>
+</head>
+<body class="doc-page">
+<div class="wrap">
+
+  <div class="hdr"><span class="badge">APX A</span>
+    <span class="mono" style="font-size:11px;letter-spacing:0.12em;text-transform:uppercase;color:var(--dim)">notification systems at scale · appendix</span>
+  </div>
+  <h1>Anatomy of a Connection</h1>
+
+  <h2>Why this appendix exists</h2>
+  <p>
+    Lesson 1 said push works by “the server holding open some channel to the client,”
+    and that this costs resources per connected client, 24/7. This appendix zooms all
+    the way in on that sentence: what a connection <em>is</em> physically, where it
+    lives, how many kilobytes one costs and why, and what actually happens when one
+    dies — say, when you press Ctrl+C in a terminal. Lessons 8, 9, and 10 all get
+    easier once a connection is a concrete thing instead of a magic pipe. This page
+    covers the core idea and the interactive demos; the linked <code class="mono">.md</code>
+    files go deeper on each piece.
+  </p>
+
+  <h2>A connection is memory, not a wire</h2>
+  <p>
+    Between your phone and a server there is no wire reserved for you. The internet is
+    <span class="term c">packet-switched</span>: data is chopped into
+    <span class="term c">packets</span> — small chunks, each stamped with a destination
+    address — that hop router-to-router, sharing every link with millions of strangers'
+    packets. So where does the “connection” live? <strong>In RAM, at the two ends.</strong>
+    When a client opens a TCP connection (TCP is the internet's standard reliable
+    transport protocol), both machines run a <span class="term a">handshake</span> — a
+    three-message exchange (“can we talk?” / “yes, can you hear me?” / “yes”) — and each
+    side allocates a <span class="term a">socket</span>: a kernel data structure (the
+    kernel is the core of the OS) remembering the connection's state, keyed by its
+    <span class="term a">4-tuple</span> (source IP + port, destination IP + port).
+  </p>
+  <p class="deepdive">↳ Where the socket lives in RAM: <a href="kernel-memory-and-sockets.md">kernel-memory-and-sockets.md</a>
+    · how the kernel finds it: <a href="socket-table.md">socket-table.md</a>
+    · what's inside it (sequence numbers, buffers): <a href="sequence-numbers-and-buffers.md">sequence-numbers-and-buffers.md</a></p>
+  <div class="demo">
+    <svg viewBox="0 0 690 112" role="img" aria-label="Two machines hold matching connection state in RAM while packets hop through routers that remember nothing">
+      <rect class="box" x="10" y="8" width="210" height="72" rx="6" stroke="var(--amber)"/>
+      <text class="lbl a-text" x="115" y="24" text-anchor="middle" font-weight="700">server RAM</text>
+      <text class="lbl" x="22" y="42">10.0.0.5:443 ⇄ 92.1.7.3:51823</text>
+      <text class="lbl" x="22" y="56">seq sent: 4021 · acked: 4021</text>
+      <text class="lbl" x="22" y="70">send buf 16 KB · recv 16 KB</text>
+      <rect class="box" x="470" y="8" width="210" height="72" rx="6" stroke="var(--amber)"/>
+      <text class="lbl a-text" x="575" y="24" text-anchor="middle" font-weight="700">client RAM</text>
+      <text class="lbl" x="482" y="42">92.1.7.3:51823 ⇄ 10.0.0.5:443</text>
+      <text class="lbl" x="482" y="56">seq recv: 4021 · next: 4022</text>
+      <text class="lbl" x="482" y="70">send buf 16 KB · recv 16 KB</text>
+      <line class="wire" x1="220" y1="42" x2="470" y2="42" stroke-dasharray="3 4"/>
+      <g fill="var(--surface-2)" stroke="var(--line)">
+        <circle cx="300" cy="42" r="8"/><circle cx="345" cy="42" r="8"/><circle cx="390" cy="42" r="8"/>
+      </g>
+      <g><circle class="c-fill hop-dot" cx="224" cy="42" r="4"/></g>
+      <text class="lbl" x="345" y="68" text-anchor="middle">↑ routers: remember nothing about you</text>
+      <text class="lbl-strong" x="345" y="102" text-anchor="middle">“connected” = matching state at the two ends — a shared belief, not a wire</text>
+    </svg>
+    <div class="cap">The one exception in the middle: your home router's <strong>NAT</strong> (the box sharing one
+      public IP among your devices) keeps a small table entry per connection. Remember it — it comes back to bite in the “silence” section.</div>
+  </div>
+
+  <h2>What one connection costs</h2>
+  <p>
+    Because a connection is memory, its cost is kilobytes, not megabytes: a few KB of
+    kernel socket structure, send/receive buffers, ~10–20 KB of
+    <span class="term a">TLS</span> state if encrypted, plus whatever your application
+    keeps per user. A tuned idle connection lands around <strong>10–50 KB</strong> — so
+    a million of them is 10–50 GB, and it must be RAM, because kernel socket memory
+    can't swap to disk. The <em>client</em> pays too: keeping a phone's radio awake
+    burns battery, which is why the OS keeps <em>one</em> shared push connection (to
+    APNs/FCM — Lesson 8) rather than one per app.
+  </p>
+  <p class="deepdive">↳ Full cost breakdown (file descriptors, TLS, buffers): <a href="kernel-memory-and-sockets.md">kernel-memory-and-sockets.md</a>
+    and <a href="sequence-numbers-and-buffers.md">sequence-numbers-and-buffers.md</a></p>
+
+  <h2>Threads: the cost that used to be the killer</h2>
+  <p>
+    The obvious server design is <span class="term a">thread-per-connection</span>: each
+    connection gets its own thread (an independent line of execution) that sleeps until
+    data arrives. But a thread's default stack is ~1 MB — the design collapses around
+    10,000 connections, a wall the industry named the <span class="term a">C10K
+    problem</span>. The winning answer is <span class="term c">event-driven</span> I/O:
+    <em>one</em> thread asks the kernel “which of my 100,000 sockets have data?” via an
+    API like Linux's <span class="term c">epoll</span>, then services the ready ones in
+    a loop — the <span class="term c">event loop</span> (Nginx, Node.js, Netty). Go's
+    goroutines are a middle path: ~4 KB stacks multiplexed onto a few real threads.
+    Idle isn't free either — both sides send periodic heartbeats to catch silent death
+    and keep NAT mappings alive.
+  </p>
+  <p class="deepdive">↳ Full C10K story and the heartbeat cost: <a href="threads-vs-event-loop.md">threads-vs-event-loop.md</a></p>
+
+  <h2>Try it — size a push gateway box</h2>
+  <p>
+    You now know everything a capacity planner knows. Drag the sliders: how many
+    connections can one server hold, and what does “keeping them alive” cost?
+  </p>
+  <div class="demo sim">
+    <div class="sim-row">
+      <label for="conns">connections on this box</label>
+      <input type="range" id="conns" min="0" max="100" value="67" />
+      <span class="val" id="connsOut">1.0M</span>
+    </div>
+    <div class="sim-row">
+      <label for="kb">KB per connection</label>
+      <input type="range" id="kb" min="5" max="100" value="30" />
+      <span class="val" id="kbOut">30 KB</span>
+    </div>
+    <div class="sim-row">
+      <label for="hb">heartbeat every</label>
+      <input type="range" id="hb" min="10" max="300" value="30" step="5" />
+      <span class="val" id="hbOut">30 s</span>
+    </div>
+    <div class="stats">
+      <div class="stat warn"><div class="k">RAM for connections</div><div class="v" id="ram">30 GB</div></div>
+      <div class="stat"><div class="k">heartbeats / sec to absorb</div><div class="v" id="hps">33.3k</div></div>
+      <div class="stat warn"><div class="k">ghost window (silent death)</div><div class="v" id="ghost">≤ 30 s</div></div>
+      <div class="stat ok"><div class="k">boxes for 100M users</div><div class="v" id="boxes">100</div></div>
+    </div>
+    <div class="cap">The “ghost window” is how long the server can keep pushing to a client that silently died —
+      the connection state says ESTABLISHED, reality says subway tunnel. Faster heartbeats shrink the window but raise
+      the per-second overhead. There is no free setting; this is Lesson 1's latency-vs-load beam again.</div>
+  </div>
+
+  <h2>Connections all the way up the stack</h2>
+  <p>
+    “Connection” means something at every protocol layer, and the layers stack.
+    <span class="term c">UDP</span> is the <em>connectionless</em> transport — fire-and-forget,
+    no state (DNS, video calls). <span class="term a">TCP</span> is the connection
+    described above. <span class="term a">TLS</span> layers encryption on it, and
+    <strong>HTTP/1.1</strong>, <strong>HTTP/2</strong>, <span class="term a">WebSocket</span>,
+    and <strong>SSH</strong> each reuse, multiplex, or <em>upgrade</em> one TCP connection
+    in a different way. <span class="term c">QUIC</span> (HTTP/3) rebuilds TCP's ideas on
+    top of UDP — proving the thesis: a connection is just state plus rules, so you can
+    build one on anything.
+  </p>
+  <p class="deepdive">↳ Layer-by-layer breakdown: <a href="protocol-stack.md">protocol-stack.md</a></p>
+  <div class="demo">
+    <svg viewBox="0 0 690 180" role="img" aria-label="Protocol tower: HTTP, WebSocket, and SSH ride on TLS over TCP; QUIC rebuilds connections on connectionless UDP; both sit on IP and the shared physical network">
+      <rect class="box" x="10" y="8" width="430" height="34" rx="5" stroke="var(--amber)"/>
+      <text class="lbl a-text" x="225" y="23" text-anchor="middle" font-weight="700">HTTP/1.1 keep-alive · HTTP/2 streams · WebSocket · SSH</text>
+      <text class="lbl s8" x="225" y="36" text-anchor="middle">one TCP connection: reused, multiplexed, upgraded, channelled</text>
+      <rect class="box" x="10" y="46" width="430" height="30" rx="5" stroke="var(--amber)"/>
+      <text class="lbl a-text" x="225" y="60" text-anchor="middle" font-weight="700">TLS — same connection + secret keys</text>
+      <text class="lbl s8" x="225" y="72" text-anchor="middle">“secure connection” = one more handshake, more state at both ends</text>
+      <rect class="box" x="10" y="80" width="430" height="32" rx="5" stroke="var(--amber)"/>
+      <text class="lbl a-text" x="225" y="95" text-anchor="middle" font-weight="700">TCP — THE connection</text>
+      <text class="lbl s8" x="225" y="107" text-anchor="middle">3-way handshake · sequence numbers · retransmission</text>
+      <rect class="box" x="452" y="8" width="228" height="68" rx="5" stroke="var(--cyan)"/>
+      <text class="lbl c-text" x="566" y="26" text-anchor="middle" font-weight="700">QUIC / HTTP-3</text>
+      <text class="lbl s8" x="566" y="44" text-anchor="middle">TCP's ideas rebuilt on UDP,</text>
+      <text class="lbl s8" x="566" y="58" text-anchor="middle">in userspace — a connection</text>
+      <text class="lbl s8" x="566" y="70" text-anchor="middle">is just state + rules</text>
+      <rect class="box" x="452" y="80" width="228" height="32" rx="5" stroke="var(--cyan)"/>
+      <text class="lbl c-text" x="566" y="95" text-anchor="middle" font-weight="700">UDP — connectionless</text>
+      <text class="lbl s8" x="566" y="107" text-anchor="middle">fire-and-forget, zero state</text>
+      <rect class="box" x="10" y="118" width="670" height="26" rx="5"/>
+      <text class="lbl-strong" x="345" y="134" text-anchor="middle">IP — addressed packets, no connection state anywhere</text>
+      <rect class="box" x="10" y="150" width="670" height="26" rx="5"/>
+      <text class="lbl" x="345" y="166" text-anchor="middle">physical: fiber · copper · radio — shared by everyone, reserved for no one</text>
+    </svg>
+    <div class="cap">Every layer you add = more per-connection state in RAM at both ends. A WebSocket-over-TLS connection is three
+      agreements stacked: TCP's, TLS's, and WebSocket's.</div>
+  </div>
+
+  <h2>How connections die — try to kill one</h2>
+  <p>
+    There are exactly three endings, and which one you get depends on a single
+    question: <em>did a goodbye packet make it out?</em> Kill the connection below three
+    ways and watch what the server believes.
+  </p>
+  <div class="demo">
+    <div class="btns">
+      <button id="btnFin">Ctrl+C / close() → FIN</button>
+      <button id="btnRst">crash / LB timeout → RST</button>
+      <button id="btnCut">pull the cable → silence</button>
+      <button id="btnReset">↺ reconnect</button>
+    </div>
+    <svg viewBox="0 0 690 100" role="img" aria-label="Interactive: kill the connection with FIN, RST, or silence and watch what the server believes">
+      <rect class="box" x="10" y="14" width="130" height="48" rx="6"/>
+      <text class="lbl-strong" x="75" y="34" text-anchor="middle">client</text>
+      <text class="lbl" x="75" y="50" text-anchor="middle" id="clientNote">connected</text>
+      <line class="wire" id="killWire" x1="140" y1="38" x2="550" y2="38" stroke-width="2"/>
+      <text x="336" y="44" style="font-size:16px" fill="var(--amber)" id="scissors" opacity="0">✂</text>
+      <g><circle id="killDot" class="c-fill" cx="150" cy="38" r="5" opacity="0"/></g>
+      <text class="lbl c-text" id="dotLbl" x="170" y="26" opacity="0">FIN</text>
+      <rect class="box" x="550" y="14" width="130" height="48" rx="6" stroke="var(--amber)"/>
+      <text class="lbl-strong" x="615" y="34" text-anchor="middle">server believes:</text>
+      <text class="lbl a-text" x="615" y="50" text-anchor="middle" font-weight="700" id="srvState">ESTABLISHED</text>
+      <text class="lbl" x="345" y="90" text-anchor="middle" id="killCap">the socket is open — pick a way to kill it</text>
+    </svg>
+    <div class="cap" id="killVerdict">FIN and RST are <em>information</em> — the server's belief updates instantly.
+      Silence sends nothing: the server keeps believing, and only a failed write (minutes), TCP keepalive (2 hours by default!),
+      or an app heartbeat (~30 s, shown here at 10× speed) reveals the truth. That stuck state is called a
+      <strong>half-open connection</strong>.</div>
+  </div>
+  <p>
+    In short: <strong>FIN</strong> (“I'm done sending”) is sent by the kernel even when
+    the process is killed by Ctrl+C or <code class="mono">kill -9</code> — the kernel
+    outlives the process and closes politely on its behalf. <strong>RST</strong>
+    (“no such connection — stop”) is the slam: a crashed peer, a dead port, a load
+    balancer's idle timeout. <strong>Silence</strong> is the dangerous one — cable
+    yanked, battery dead, kernel panic — no packet at all, so the server's socket sits
+    in ESTABLISHED believing in a ghost until a failed write, a 2-hour TCP keepalive, or
+    a ~30 s app heartbeat reveals the truth.
+  </p>
+  <p class="deepdive">↳ Full mechanics of FIN/RST/silence, plus the SSH Ctrl+C twist: <a href="connection-death-and-detection.md">connection-death-and-detection.md</a></p>
+
+  <h2>Back to the notification system</h2>
+  <p>
+    Reread Lesson 1's claim with X-ray vision: “push requires a connection per client”
+    means an event-driven gateway holding ~1M sockets ≈ tens of GB of RAM, ~33k
+    heartbeats/sec of pure overhead, and a ghost window of one heartbeat interval during
+    which it pushes to clients that silently died. That window is why Lesson 10's pull
+    fallback is not optional — and “which of my thousand gateways holds user X's
+    socket?” is exactly Lesson 9's presence problem.
+  </p>
+
+  <h2>Recap</h2>
+  <div class="recap">
+    <ul>
+      <li>A connection is <strong>matching state in RAM at both ends</strong> — a shared belief, not a reserved wire. Routers keep nothing (except NAT).</li>
+      <li>One idle connection ≈ <strong>10–50 KB</strong> (socket + buffers + TLS + app state); a million ≈ tens of GB of unswappable RAM.</li>
+      <li><strong>Thread-per-connection</strong> hits the C10K wall; <strong>event loops</strong> (epoll — Nginx, Node) and goroutines make millions cheap.</li>
+      <li>The stack layers connections on connections: TCP → TLS → HTTP / WebSocket / SSH; QUIC rebuilds it all on connectionless UDP.</li>
+      <li>Three deaths: <strong>FIN</strong> (polite — sent even on Ctrl+C or kill -9), <strong>RST</strong> (slam), <strong>silence</strong> (half-open — caught only by a failed write, a 2-hour TCP keepalive, or the app's ~30 s heartbeat).</li>
+    </ul>
+  </div>
+
+  <h2>Check yourself</h2>
+  <div class="check">
+    <ol>
+      <li>Your gateway shows 1M ESTABLISHED connections but only 950k users are really online. Where did the other 50k go, and what three mechanisms could reveal them?</li>
+      <li>Ctrl+C on a local curl informs the server almost instantly, but a dead laptop battery leaves it clueless for seconds-to-hours. What's the one-sentence explanation?</li>
+      <li>Why does an event-driven server pay ~10 KB per idle connection while a thread-per-connection server pays ~1 MB?</li>
+    </ol>
+  </div>
+
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  /* ---- gateway sizing sim ---- */
+  var conns = document.getElementById("conns");
+  var kb = document.getElementById("kb");
+  var hb = document.getElementById("hb");
+  var connsOut = document.getElementById("connsOut");
+  var kbOut = document.getElementById("kbOut");
+  var hbOut = document.getElementById("hbOut");
+  var ram = document.getElementById("ram");
+  var hps = document.getElementById("hps");
+  var ghost = document.getElementById("ghost");
+  var boxes = document.getElementById("boxes");
+
+  function fmt(n) {
+    if (n >= 1e6) return (n / 1e6).toFixed(1) + "M";
+    if (n >= 1e3) return (n / 1e3).toFixed(1) + "k";
+    return String(Math.round(n));
+  }
+  function update() {
+    // logarithmic: 10k .. 5M connections
+    var t = conns.value / 100;
+    var n = Math.round(Math.exp(Math.log(1e4) + t * (Math.log(5e6) - Math.log(1e4))));
+    connsOut.textContent = fmt(n);
+    kbOut.textContent = kb.value + " KB";
+    hbOut.textContent = hb.value + " s";
+    var gb = n * kb.value / 1e6;
+    ram.textContent = (gb >= 100 ? Math.round(gb) : gb.toFixed(1)) + " GB";
+    hps.textContent = fmt(n / hb.value);
+    ghost.textContent = "≤ " + hb.value + " s";
+    boxes.textContent = fmt(Math.ceil(1e8 / n));
+  }
+  conns.addEventListener("input", update);
+  kb.addEventListener("input", update);
+  hb.addEventListener("input", update);
+  update();
+
+  /* ---- kill-the-connection demo ---- */
+  var wire = document.getElementById("killWire");
+  var dot = document.getElementById("killDot");
+  var dotLbl = document.getElementById("dotLbl");
+  var scissors = document.getElementById("scissors");
+  var srvState = document.getElementById("srvState");
+  var clientNote = document.getElementById("clientNote");
+  var cap = document.getElementById("killCap");
+  var timer = null;
+
+  function reset() {
+    if (timer) { clearInterval(timer); timer = null; }
+    dot.style.transition = "none";
+    dot.style.transform = "translateX(0)";
+    dot.setAttribute("opacity", "0");
+    dot.setAttribute("fill", "var(--cyan)");
+    dotLbl.setAttribute("opacity", "0");
+    scissors.setAttribute("opacity", "0");
+    wire.setAttribute("stroke-dasharray", "");
+    wire.style.opacity = "1";
+    srvState.textContent = "ESTABLISHED";
+    clientNote.textContent = "connected";
+    cap.textContent = "the socket is open — pick a way to kill it";
+  }
+
+  function sendPacket(label, after) {
+    dot.style.transition = "none";
+    dot.style.transform = "translateX(0)";
+    dot.setAttribute("opacity", "1");
+    dotLbl.textContent = label;
+    dotLbl.setAttribute("opacity", "1");
+    // force reflow so the transition restarts from x=0
+    void dot.getBoundingClientRect();
+    dot.style.transition = "transform 0.7s linear";
+    dot.style.transform = "translateX(390px)";
+    setTimeout(function () {
+      dot.setAttribute("opacity", "0");
+      dotLbl.setAttribute("opacity", "0");
+      after();
+    }, 750);
+  }
+
+  document.getElementById("btnFin").addEventListener("click", function () {
+    reset();
+    clientNote.textContent = "^C — process dead";
+    cap.textContent = "the kernel outlives the process and sends FIN for it…";
+    sendPacket("FIN", function () {
+      srvState.textContent = "CLOSED ✓";
+      cap.textContent = "server knew within one round-trip — state freed, polite goodbye complete";
+    });
+  });
+
+  document.getElementById("btnRst").addEventListener("click", function () {
+    reset();
+    clientNote.textContent = "crashed";
+    cap.textContent = "peer no longer remembers this connection — it slams the door…";
+    dot.setAttribute("fill", "none");
+    dot.setAttribute("stroke", "var(--cyan)");
+    dot.setAttribute("stroke-width", "2");
+    sendPacket("RST", function () {
+      dot.setAttribute("fill", "var(--cyan)");
+      dot.removeAttribute("stroke");
+      srvState.textContent = "CLOSED (rudely) ✓";
+      cap.textContent = "abrupt, but still information — the server's belief matches reality again";
+    });
+  });
+
+  document.getElementById("btnCut").addEventListener("click", function () {
+    reset();
+    clientNote.textContent = "battery dead";
+    scissors.setAttribute("opacity", "1");
+    wire.setAttribute("stroke-dasharray", "2 5");
+    wire.style.opacity = "0.35";
+    var t = 0;
+    srvState.textContent = "ESTABLISHED…";
+    cap.textContent = "no packet was sent. sim time ×10 — waiting for the ~30 s heartbeat…";
+    timer = setInterval(function () {
+      t += 1; // 1 tick = 1 simulated second at 10x
+      if (t < 30) {
+        srvState.textContent = "ESTABLISHED…";
+        cap.textContent = "half-open for " + t + " s (sim ×10) — server still pushing to a ghost";
+      } else {
+        clearInterval(timer); timer = null;
+        srvState.textContent = "CLOSED (heartbeat failed)";
+        cap.textContent = "app heartbeat noticed after ~30 s. TCP keepalive alone would have taken 2 hours.";
+      }
+    }, 100);
+  });
+
+  document.getElementById("btnReset").addEventListener("click", reset);
+})();
+</script>
+</body>
+</html>

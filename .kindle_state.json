@@ -1,0 +1,9 @@
+{
+  "last_sent_lesson": 1,
+  "sent_history": [
+    {
+      "num": 1,
+      "slug": "01-push-vs-pull-vs-poll"
+    }
+  ]
+}

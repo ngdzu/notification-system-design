@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>L02 · High-Level Architecture</title>
+<link rel="stylesheet" href="../assets/course.css" />
+<script defer src="../assets/diagrams.js"></script>
+<style>
+  /* lesson-specific: dot flowing across the 6-stage pipeline */
+  .stage-box { fill: var(--surface-2); stroke: var(--line); stroke-width: 1.2; rx: 6; }
+  .stage-box.in  { stroke: var(--amber); }
+  .stage-box.out { stroke: var(--cyan); }
+  .pipe-dot { fill: var(--amber); }
+  @keyframes flow1 { 0%,4%{transform:translateX(0);opacity:1} 15%{transform:translateX(190px);opacity:1} 16%,100%{transform:translateX(190px);opacity:0} }
+  @keyframes flow2 { 0%,20%{opacity:0;transform:translateX(190px)} 21%{opacity:1} 32%{transform:translateX(380px);opacity:1} 33%,100%{transform:translateX(380px);opacity:0} }
+  @keyframes flow3 { 0%,37%{opacity:0;transform:translateX(380px)} 38%{opacity:1;fill:var(--cyan)} 49%{transform:translateX(570px);opacity:1} 50%,100%{transform:translateX(570px);opacity:0} }
+  @keyframes flow4 { 0%,54%{opacity:0;transform:translateX(570px)} 55%{opacity:1} 66%{transform:translateX(760px);opacity:1} 67%,100%{transform:translateX(760px);opacity:0} }
+  @keyframes flow5 { 0%,71%{opacity:0;transform:translateX(760px)} 72%{opacity:1} 83%{transform:translateX(950px);opacity:1} 84%,100%{opacity:0;transform:translateX(950px)} }
+  .f1 { animation: flow1 5.5s linear infinite; }
+  .f2 { animation: flow2 5.5s linear infinite; }
+  .f3 { animation: flow3 5.5s linear infinite; }
+  .f4 { animation: flow4 5.5s linear infinite; }
+  .f5 { animation: flow5 5.5s linear infinite; }
+
+  .burst-bar { animation: burst-rise 3.2s ease-in-out infinite; transform-origin: bottom; }
+  @keyframes burst-rise { 0%,100%{transform:scaleY(1)} 30%{transform:scaleY(1.9)} 55%{transform:scaleY(0.6)} }
+  .drain-dot { animation: drain-out 1.4s linear infinite; }
+  @keyframes drain-out { 0%{transform:translateY(0);opacity:0} 10%{opacity:1} 90%{transform:translateY(46px);opacity:1} 100%{transform:translateY(46px);opacity:0} }
+
+  .fail-x { animation: blink 1s ease-in-out infinite; }
+  .grow-bar { animation: grow-up 3s ease-in-out infinite; transform-origin: bottom; }
+  @keyframes grow-up { 0%{transform:scaleY(0.2)} 100%{transform:scaleY(1)} }
+</style>
+</head>
+<body class="poster-page">
+<div class="poster">
+
+  <div class="hdr">
+    <span class="badge">L02</span>
+    <h1>High-Level Architecture: The Map of the System</h1>
+    <span class="sub">one event, six stages · every later lesson zooms into one box below</span>
+  </div>
+
+  <!-- THE PIPELINE -->
+  <div class="panel span12">
+    <h2>The pipeline — <span class="term a">1 event in</span> → <span class="term c">N deliveries out</span></h2>
+    <svg viewBox="0 0 1150 145" role="img" aria-label="Six-stage pipeline: producer, ingestion service, fan-out service, queue, delivery worker, channel, with a message flowing left to right">
+      <!-- wires -->
+      <line class="wire" x1="165" y1="60" x2="205" y2="60"/>
+      <line class="wire" x1="355" y1="60" x2="395" y2="60"/>
+      <line class="wire" x1="545" y1="60" x2="585" y2="60"/>
+      <line class="wire" x1="735" y1="60" x2="775" y2="60"/>
+      <line class="wire" x1="925" y1="60" x2="965" y2="60"/>
+
+      <!-- boxes -->
+      <rect class="stage-box in"  x="15"  y="30" width="150" height="60"/>
+      <rect class="stage-box in"  x="205" y="30" width="150" height="60"/>
+      <rect class="stage-box in"  x="395" y="30" width="150" height="60"/>
+      <rect class="stage-box out" x="585" y="30" width="150" height="60"/>
+      <rect class="stage-box out" x="775" y="30" width="150" height="60"/>
+      <rect class="stage-box out" x="965" y="30" width="150" height="60"/>
+
+      <text class="lbl-strong a-text" x="90"  y="48" text-anchor="middle">PRODUCER</text>
+      <text class="lbl" x="90" y="62" text-anchor="middle">something</text>
+      <text class="lbl" x="90" y="73" text-anchor="middle">happens</text>
+      <text class="lbl" x="90" y="105" text-anchor="middle" font-style="italic">"Alice likes Bob's photo"</text>
+
+      <text class="lbl-strong a-text" x="280" y="48" text-anchor="middle">INGESTION</text>
+      <text class="lbl" x="280" y="62" text-anchor="middle">validate &amp;</text>
+      <text class="lbl" x="280" y="73" text-anchor="middle">record durably</text>
+      <text class="lbl" x="280" y="105" text-anchor="middle" font-style="italic">the front-door intake desk</text>
+
+      <text class="lbl-strong a-text" x="470" y="48" text-anchor="middle">FAN-OUT</text>
+      <text class="lbl" x="470" y="62" text-anchor="middle">who needs</text>
+      <text class="lbl" x="470" y="73" text-anchor="middle">to know?</text>
+      <text class="lbl" x="470" y="105" text-anchor="middle" font-style="italic">1 event → list of recipients (→ L4, L5)</text>
+
+      <text class="lbl-strong c-text" x="660" y="48" text-anchor="middle">QUEUE</text>
+      <text class="lbl" x="660" y="62" text-anchor="middle">holds work</text>
+      <text class="lbl" x="660" y="73" text-anchor="middle">until it's picked up</text>
+      <text class="lbl" x="660" y="105" text-anchor="middle" font-style="italic">shock absorber (→ L6, L7)</text>
+
+      <text class="lbl-strong c-text" x="850" y="48" text-anchor="middle">DELIVERY WORKER</text>
+      <text class="lbl" x="850" y="62" text-anchor="middle">pulls work,</text>
+      <text class="lbl" x="850" y="73" text-anchor="middle">sends it</text>
+      <text class="lbl" x="850" y="105" text-anchor="middle" font-style="italic">many run in parallel (→ L8-L10)</text>
+
+      <text class="lbl-strong c-text" x="1040" y="48" text-anchor="middle">CHANNEL</text>
+      <text class="lbl" x="1040" y="62" text-anchor="middle">push · in-app</text>
+      <text class="lbl" x="1040" y="73" text-anchor="middle">email · SMS</text>
+      <text class="lbl" x="1040" y="105" text-anchor="middle" font-style="italic">the medium the user sees (→ L3)</text>
+
+      <!-- flowing dot -->
+      <circle class="pipe-dot f1" cx="165" cy="60" r="5"/>
+      <circle class="pipe-dot f2" cx="0"   cy="60" r="5"/>
+      <circle class="pipe-dot f3" cx="0"   cy="60" r="5"/>
+      <circle class="pipe-dot f4" cx="0"   cy="60" r="5"/>
+      <circle class="pipe-dot f5" cx="0"   cy="60" r="5"/>
+
+      <text class="lbl" x="575" y="132" text-anchor="middle">producer / ingestion / fan-out handle <tspan class="a-text" font-weight="700">one event</tspan> · queue / delivery / channel handle <tspan class="c-text" font-weight="700">many deliveries</tspan></text>
+    </svg>
+  </div>
+
+  <!-- FAN-OUT ZOOM -->
+  <div class="panel span4">
+    <h2>Fan-out is the pivot point</h2>
+    <svg viewBox="0 0 360 130" role="img" aria-label="One event either produces one delivery for a regular post, or millions for a celebrity post">
+      <circle cx="34" cy="40" r="8" fill="var(--amber)"/>
+      <text class="lbl" x="34" y="20" text-anchor="middle">1 event</text>
+
+      <line class="wire" x1="44" y1="36" x2="110" y2="36"/>
+      <circle class="c-fill" cx="118" cy="36" r="5"/>
+      <text class="lbl c-text" x="128" y="40">1 delivery — "Bob got a like"</text>
+
+      <line class="wire" x1="44" y1="44" x2="100" y2="90"/>
+      <g class="c-fill">
+        <circle cx="108" cy="92" r="3.5"/><circle cx="130" cy="87" r="3.5"/><circle cx="152" cy="95" r="3.5"/>
+        <circle cx="174" cy="86" r="3.5"/><circle cx="196" cy="93" r="3.5"/><circle cx="218" cy="88" r="3.5"/>
+        <circle cx="240" cy="94" r="3.5"/><circle cx="262" cy="87" r="3.5"/><circle cx="284" cy="92" r="3.5"/>
+      </g>
+      <text class="lbl c-text" x="108" y="112">millions of deliveries — celebrity (→ L5)</text>
+    </svg>
+    <div class="verdicts">
+      <span class="chip good a">fan-out decides the shape</span>
+      <span class="chip good c">1 in, 1..N out</span>
+    </div>
+  </div>
+
+  <!-- QUEUE AS SHOCK ABSORBER -->
+  <div class="panel span4">
+    <h2>Queue = shock absorber</h2>
+    <svg viewBox="0 0 360 130" role="img" aria-label="Bursty arrival of fan-out work into a queue, drained at a steady rate by delivery workers">
+      <text class="lbl" x="60" y="14" text-anchor="middle">bursty in</text>
+      <rect class="burst-bar a-fill" x="30"  y="60" width="10" height="16" style="animation-delay:0s"/>
+      <rect class="burst-bar a-fill" x="50"  y="55" width="10" height="21" style="animation-delay:.3s"/>
+      <rect class="burst-bar a-fill" x="70"  y="50" width="10" height="26" style="animation-delay:.6s"/>
+      <rect class="burst-bar a-fill" x="90"  y="60" width="10" height="16" style="animation-delay:.9s"/>
+
+      <rect class="box" x="130" y="30" width="90" height="60" rx="6"/>
+      <text class="lbl-strong" x="175" y="55" text-anchor="middle">QUEUE</text>
+      <text class="lbl" x="175" y="70" text-anchor="middle">buffered</text>
+      <text class="lbl" x="175" y="82" text-anchor="middle">work</text>
+
+      <text class="lbl" x="290" y="14" text-anchor="middle">steady out</text>
+      <line class="wire" x1="290" y1="24" x2="290" y2="90"/>
+      <circle class="drain-dot c-fill" cx="290" cy="24" r="5"/>
+    </svg>
+    <div class="verdicts">
+      <span class="chip good a">absorbs the fan-out spike</span>
+      <span class="chip good c">workers drain it at their own pace</span>
+    </div>
+  </div>
+
+  <!-- FAILURE ISOLATION -->
+  <div class="panel span4">
+    <h2>Stages fail independently</h2>
+    <svg viewBox="0 0 360 130" role="img" aria-label="Delivery worker outage: ingestion keeps accepting normally, the queue grows, delivery is stalled">
+      <rect class="box" x="10"  y="14" width="100" height="34" rx="5"/>
+      <text class="lbl-strong" x="60" y="34" text-anchor="middle">ingestion</text>
+      <circle class="blink a-fill" cx="98" cy="22" r="5"/>
+      <text class="lbl" x="60" y="60" text-anchor="middle">still accepting fine</text>
+
+      <rect class="box" x="130" y="14" width="100" height="34" rx="5"/>
+      <text class="lbl-strong" x="180" y="34" text-anchor="middle">queue</text>
+      <rect class="grow-bar c-fill" x="136" y="20" width="14" height="22" style="animation-duration:2.4s"/>
+      <text class="lbl" x="180" y="60" text-anchor="middle">absorbs the backlog ↑</text>
+
+      <rect class="box" x="250" y="14" width="100" height="34" rx="5"/>
+      <text class="lbl-strong" x="300" y="34" text-anchor="middle">delivery</text>
+      <text class="fail-x lbl" x="300" y="24" text-anchor="middle" font-size="14" fill="var(--amber)" font-weight="700">✕</text>
+      <text class="lbl" x="300" y="60" text-anchor="middle">stalled (APNs outage)</text>
+
+      <line class="wire" x1="112" y1="31" x2="128" y2="31"/>
+      <line class="wire" x1="232" y1="31" x2="248" y2="31"/>
+
+      <text class="lbl" x="180" y="90" text-anchor="middle">no queue: an outage propagates upstream instantly</text>
+      <text class="lbl a-text" x="180" y="104" text-anchor="middle">with a queue: only delivery is stuck</text>
+      <text class="lbl a-text" x="180" y="117" text-anchor="middle">the rest of the system keeps running</text>
+    </svg>
+    <div class="verdicts">
+      <span class="chip">queue keeps absorbing while delivery is stuck</span>
+    </div>
+  </div>
+
+  <!-- CHANNELS -->
+  <div class="panel span12">
+    <h2>Last stage: pick a channel — same delivery worker, four possible outputs</h2>
+    <svg viewBox="0 0 1150 70" role="img" aria-label="A delivery worker chooses among push notification, in-app feed, email, or SMS as the channel">
+      <rect class="box out" x="20" y="15" width="130" height="40" rx="6"/>
+      <text class="lbl-strong c-text" x="85" y="39" text-anchor="middle">DELIVERY WORKER</text>
+
+      <line class="wire" x1="150" y1="35" x2="280" y2="20"/>
+      <line class="wire" x1="150" y1="35" x2="280" y2="35"/>
+      <line class="wire" x1="150" y1="35" x2="280" y2="50"/>
+      <line class="wire" x1="150" y1="35" x2="280" y2="65"/>
+
+      <rect class="box" x="290" y="6"  width="180" height="26" rx="5"/>
+      <text class="lbl-strong" x="380" y="23" text-anchor="middle">push notification</text>
+      <rect class="box" x="500" y="6"  width="180" height="26" rx="5"/>
+      <text class="lbl-strong" x="590" y="23" text-anchor="middle">in-app / in-feed</text>
+      <rect class="box" x="710" y="6"  width="150" height="26" rx="5"/>
+      <text class="lbl-strong" x="785" y="23" text-anchor="middle">email</text>
+      <rect class="box" x="890" y="6"  width="150" height="26" rx="5"/>
+      <text class="lbl-strong" x="965" y="23" text-anchor="middle">SMS</text>
+
+      <text class="lbl" x="590" y="60" text-anchor="middle">which channel(s) depends on urgency &amp; priority tier — covered next in L03</text>
+    </svg>
+  </div>
+
+</div>
+</body>
+</html>

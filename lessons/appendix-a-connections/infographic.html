@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>APX A · Anatomy of a Connection</title>
+<link rel="stylesheet" href="../assets/course.css" />
+<script defer src="../assets/diagrams.js"></script>
+<style>
+  /* appendix-specific: slow packet hops + heartbeat pulse.
+     note: viewBoxes here are sized ~1 unit : 1 rendered px (span4≈360, span5≈460, span7≈660) */
+  .hop-dot { --travel: 88px; animation: push-dot 2.4s linear infinite; }
+  .fin-dot { --travel: 300px; animation: push-dot 2.6s linear infinite; }
+  .ctrlc-dot { --travel: 328px; animation: push-dot 2.2s linear infinite; }
+  .s8 { font-size: 8px; }
+  @keyframes beat { 0%, 100% { transform: scale(1); } 12% { transform: scale(1.45); } 24% { transform: scale(1); } }
+  .beat { transform-origin: center; transform-box: fill-box; animation: beat 1.6s ease-in-out infinite; }
+</style>
+</head>
+<body class="poster-page">
+<div class="poster">
+
+  <div class="hdr">
+    <span class="badge">APX A</span>
+    <h1>Anatomy of a Connection</h1>
+    <span class="sub">amber = the logical state both ends <em>believe</em> · cyan = the physical packets that actually move</span>
+  </div>
+
+  <!-- MEMORY, NOT A WIRE -->
+  <div class="panel span4">
+    <h2 style="color:var(--amber)">① A connection is memory, not a wire</h2>
+    <svg viewBox="0 0 360 124" role="img" aria-label="Two machines hold matching connection state in RAM; packets hop through routers that remember nothing">
+      <rect class="box" x="4" y="10" width="128" height="64" rx="5" stroke="var(--amber)"/>
+      <text class="lbl a-text" x="68" y="24" text-anchor="middle" font-weight="700">server RAM</text>
+      <text class="lbl s8" x="12" y="38">10.0.0.5:443 ⇄</text>
+      <text class="lbl s8" x="12" y="50">92.1.7.3:51823</text>
+      <text class="lbl s8" x="12" y="62">seq 4021 · bufs 32 KB</text>
+      <rect class="box" x="228" y="10" width="128" height="64" rx="5" stroke="var(--amber)"/>
+      <text class="lbl a-text" x="292" y="24" text-anchor="middle" font-weight="700">client RAM</text>
+      <text class="lbl s8" x="236" y="38">92.1.7.3:51823 ⇄</text>
+      <text class="lbl s8" x="236" y="50">10.0.0.5:443</text>
+      <text class="lbl s8" x="236" y="62">seq 4021 · bufs 32 KB</text>
+      <line class="wire" x1="132" y1="44" x2="228" y2="44" stroke-dasharray="3 4"/>
+      <g fill="var(--surface-2)" stroke="var(--line)">
+        <circle cx="152" cy="44" r="6"/><circle cx="180" cy="44" r="6"/><circle cx="208" cy="44" r="6"/>
+      </g>
+      <g><circle class="c-fill hop-dot" cx="134" cy="44" r="3.5"/></g>
+      <text class="lbl s8" x="180" y="90" text-anchor="middle">↑ routers: no memory of you</text>
+      <text class="lbl-strong" x="180" y="106" text-anchor="middle">“connected” = matching state at the two ends</text>
+      <text class="lbl s8" x="180" y="119" text-anchor="middle">exception: your home NAT box keeps a table entry (→ ④)</text>
+    </svg>
+  </div>
+
+  <!-- COST -->
+  <div class="panel span4">
+    <h2>② What one idle connection costs</h2>
+    <svg viewBox="0 0 360 128" role="img" aria-label="Stacked bar: kernel socket plus buffers plus TLS plus app state totals roughly 10 to 50 kilobytes per idle connection">
+      <text class="lbl-strong" x="8" y="14">per-connection memory (typical, tuned)</text>
+      <g>
+        <rect x="8"   y="22" width="16"  height="20" fill="var(--dim)"/>
+        <rect x="24"  y="22" width="172" height="20" fill="var(--amber)" opacity="0.85"/>
+        <rect x="196" y="22" width="96"  height="20" fill="var(--cyan)" opacity="0.85"/>
+        <rect x="292" y="22" width="60"  height="20" fill="var(--surface-2)" stroke="var(--line)"/>
+      </g>
+      <rect x="8" y="49" width="8" height="8" fill="var(--dim)"/>
+      <text class="lbl s8" x="21" y="56">kernel socket ~2 KB</text>
+      <rect x="185" y="49" width="8" height="8" fill="var(--cyan)" opacity="0.85"/>
+      <text class="lbl s8" x="198" y="56">TLS keys ~10 KB</text>
+      <rect x="8" y="63" width="8" height="8" fill="var(--amber)" opacity="0.85"/>
+      <text class="lbl s8" x="21" y="70">send+recv buffers ~8–32 KB</text>
+      <rect x="185" y="63" width="8" height="8" fill="var(--surface-2)" stroke="var(--line)"/>
+      <text class="lbl s8" x="198" y="70">your app: varies</text>
+      <line class="wire" x1="8" y1="80" x2="352" y2="80"/>
+      <text class="lbl-strong" x="8" y="96">Σ ≈ 10–50 KB · × 1M conns ≈ tens of GB</text>
+      <text class="lbl s8" x="8" y="110">all RAM — kernel socket memory cannot swap to disk</text>
+      <text class="lbl s8" x="8" y="122">+1 file descriptor per socket (default cap: 1,024!)</text>
+    </svg>
+    <div class="verdicts">
+      <span class="chip good a">KB per conn, not MB</span>
+      <span class="chip good c">client pays in battery → OS shares 1 push conn</span>
+    </div>
+  </div>
+
+  <!-- THREAD MODELS -->
+  <div class="panel span4">
+    <h2>③ Who watches the sockets?</h2>
+    <svg viewBox="0 0 360 134" role="img" aria-label="Thread-per-connection needs a one-megabyte stack per socket and hits the C10K wall; an event loop watches one hundred thousand sockets from one thread">
+      <line class="wire" x1="180" y1="8" x2="180" y2="128" stroke-dasharray="2 4"/>
+
+      <text class="a-text" x="88" y="14" text-anchor="middle" font-weight="700" style="font-size:9px">thread-per-connection</text>
+      <g fill="var(--amber-soft)" stroke="var(--amber)">
+        <rect x="18" y="22" width="40" height="46" rx="4"/>
+        <rect x="66" y="22" width="40" height="46" rx="4"/>
+        <rect x="114" y="22" width="40" height="46" rx="4"/>
+      </g>
+      <text class="lbl a-text s8" x="38" y="48" text-anchor="middle">1 MB</text>
+      <text class="lbl a-text s8" x="86" y="48" text-anchor="middle">1 MB</text>
+      <text class="lbl a-text s8" x="134" y="48" text-anchor="middle">1 MB</text>
+      <g class="wire a-stroke" opacity="0.5">
+        <line x1="38" y1="68" x2="38" y2="76"/><line x1="86" y1="68" x2="86" y2="76"/><line x1="134" y1="68" x2="134" y2="76"/>
+      </g>
+      <g class="a-fill">
+        <circle cx="38" cy="80" r="3.5"/><circle cx="86" cy="80" r="3.5"/><circle cx="134" cy="80" r="3.5"/>
+      </g>
+      <text class="lbl s8" x="88" y="98" text-anchor="middle">1 fat thread : 1 socket</text>
+      <text class="lbl s8" x="88" y="110" text-anchor="middle">1 MB stack + context switches</text>
+      <text class="a-text s8" x="88" y="124" text-anchor="middle" font-weight="700">☠ C10K — dies ~10,000</text>
+
+      <text class="c-text" x="270" y="14" text-anchor="middle" font-weight="700" style="font-size:9px">event loop (epoll)</text>
+      <rect class="box" x="235" y="22" width="70" height="22" rx="4" stroke="var(--cyan)"/>
+      <text class="lbl c-text s8" x="270" y="36" text-anchor="middle">1 thread</text>
+      <g class="wire c-stroke" opacity="0.5">
+        <line x1="270" y1="44" x2="200" y2="76"/><line x1="270" y1="44" x2="220" y2="76"/>
+        <line x1="270" y1="44" x2="240" y2="76"/><line x1="270" y1="44" x2="260" y2="76"/>
+        <line x1="270" y1="44" x2="280" y2="76"/><line x1="270" y1="44" x2="300" y2="76"/>
+        <line x1="270" y1="44" x2="320" y2="76"/><line x1="270" y1="44" x2="340" y2="76"/>
+      </g>
+      <g class="c-fill">
+        <circle cx="200" cy="80" r="3.5"/><circle cx="220" cy="80" r="3.5"/><circle cx="240" cy="80" r="3.5"/>
+        <circle class="blink" cx="260" cy="80" r="3.5"/><circle cx="280" cy="80" r="3.5"/>
+        <circle cx="300" cy="80" r="3.5"/><circle cx="320" cy="80" r="3.5"/><circle cx="340" cy="80" r="3.5"/>
+      </g>
+      <text class="lbl s8" x="270" y="98" text-anchor="middle">asks: “which sockets are ready?”</text>
+      <text class="lbl s8" x="270" y="110" text-anchor="middle">Nginx · Node.js · Netty</text>
+      <text class="c-text s8" x="270" y="124" text-anchor="middle" font-weight="700">Go: 4 KB goroutines, epoll under</text>
+    </svg>
+  </div>
+
+  <!-- THREE DEATHS -->
+  <div class="panel span7">
+    <h2>④ Three ways a connection dies — did a goodbye packet get out?</h2>
+    <svg viewBox="0 0 660 170" role="img" aria-label="FIN closes politely and instantly, RST slams but informs, silence leaves a half-open connection the server only detects by writing, a two-hour TCP keepalive, or an application heartbeat">
+      <text class="lbl-strong" x="8" y="14">client side</text>
+      <text class="lbl-strong" x="652" y="14" text-anchor="end">what the server believes</text>
+
+      <text class="c-text" x="8" y="36" font-weight="700" style="font-size:9px">① FIN · polite</text>
+      <line class="wire" x1="120" y1="32" x2="430" y2="32"/>
+      <g><circle class="c-fill fin-dot" cx="124" cy="32" r="4"/></g>
+      <text class="lbl a-text" x="652" y="29" text-anchor="end" font-weight="700">ESTABLISHED → CLOSED</text>
+      <text class="lbl s8" x="652" y="41" text-anchor="end">knows instantly ✓</text>
+      <text class="lbl s8" x="120" y="48">^C on curl · app exits · even kill -9 — the kernel says goodbye</text>
+
+      <text class="c-text" x="8" y="76" font-weight="700" style="font-size:9px">② RST · slam</text>
+      <line class="wire" x1="120" y1="72" x2="430" y2="72"/>
+      <g><circle class="fin-dot" cx="124" cy="72" r="4" fill="none" stroke="var(--cyan)" stroke-width="2"/></g>
+      <text class="lbl a-text" x="652" y="69" text-anchor="end" font-weight="700">ESTABLISHED → CLOSED</text>
+      <text class="lbl s8" x="652" y="81" text-anchor="end">knows instantly (rudely) ✓</text>
+      <text class="lbl s8" x="120" y="88">peer crashed &amp; forgot you · no listener · LB idle-timeout</text>
+
+      <text class="a-text" x="8" y="116" font-weight="700" style="font-size:9px">③ silence</text>
+      <line class="wire" x1="120" y1="112" x2="316" y2="112"/>
+      <text x="322" y="117" style="font-size:12px" fill="var(--amber)">✂</text>
+      <line class="wire" x1="340" y1="112" x2="430" y2="112" stroke-dasharray="2 4" opacity="0.4"/>
+      <text class="lbl a-text" x="652" y="109" text-anchor="end" font-weight="700">still ESTABLISHED…</text>
+      <text class="a-text s8" x="652" y="121" text-anchor="end">half-open — belief ≠ reality ✗</text>
+      <text class="lbl s8" x="120" y="128">cable yanked · battery dead · lid closed · subway · NAT expiry</text>
+
+      <line class="wire" x1="8" y1="138" x2="652" y2="138"/>
+      <text class="lbl-strong" x="8" y="153">how ③ gets detected:</text>
+      <text class="c-text s8" x="136" y="153" font-weight="700">app heartbeat ~30 s ← the real fix</text>
+      <text class="lbl s8" x="316" y="153">next write fails: minutes</text>
+      <text class="lbl s8" x="452" y="153">TCP keepalive: 2 h (!)</text>
+      <text class="lbl s8" x="8" y="166">heartbeats also refresh the NAT entry — idle NAT mappings die in minutes, black-holing the conn</text>
+    </svg>
+  </div>
+
+  <!-- STACK -->
+  <div class="panel span5">
+    <h2>⑤ “Connection” at every layer of the stack</h2>
+    <svg viewBox="0 0 460 184" role="img" aria-label="Protocol tower: HTTP, WebSocket, and SSH ride on TLS over TCP; QUIC rebuilds connections on connectionless UDP; both sit on IP and the shared physical network">
+      <rect class="box" x="8" y="8" width="274" height="32" rx="4" stroke="var(--amber)"/>
+      <text class="a-text" x="145" y="22" text-anchor="middle" font-weight="700" style="font-size:9px">HTTP/1.1 · HTTP/2 · WebSocket · SSH</text>
+      <text class="lbl s8" x="145" y="34" text-anchor="middle">keep-alive · streams · upgrade · channels</text>
+      <rect class="box" x="8" y="44" width="274" height="28" rx="4" stroke="var(--amber)"/>
+      <text class="a-text" x="145" y="57" text-anchor="middle" font-weight="700" style="font-size:9px">TLS — same connection + secret keys</text>
+      <text class="lbl s8" x="145" y="68" text-anchor="middle">extra handshake → extra state at both ends</text>
+      <rect class="box" x="8" y="76" width="274" height="32" rx="4" stroke="var(--amber)"/>
+      <text class="a-text" x="145" y="90" text-anchor="middle" font-weight="700" style="font-size:9px">TCP — THE connection</text>
+      <text class="lbl s8" x="145" y="102" text-anchor="middle">3-way handshake · seq numbers · retransmission</text>
+
+      <rect class="box" x="292" y="8" width="160" height="64" rx="4" stroke="var(--cyan)"/>
+      <text class="c-text" x="372" y="24" text-anchor="middle" font-weight="700" style="font-size:9px">QUIC / HTTP-3</text>
+      <text class="lbl s8" x="372" y="38" text-anchor="middle">TCP's ideas rebuilt</text>
+      <text class="lbl s8" x="372" y="50" text-anchor="middle">on UDP, in userspace:</text>
+      <text class="lbl s8" x="372" y="62" text-anchor="middle">a conn = state + rules</text>
+      <rect class="box" x="292" y="76" width="160" height="32" rx="4" stroke="var(--cyan)"/>
+      <text class="c-text" x="372" y="90" text-anchor="middle" font-weight="700" style="font-size:9px">UDP — no connection</text>
+      <text class="lbl s8" x="372" y="102" text-anchor="middle">fire-and-forget packets</text>
+
+      <rect class="box" x="8" y="112" width="444" height="24" rx="4"/>
+      <text class="lbl-strong" x="230" y="127" text-anchor="middle">IP — addressed packets, zero connection state</text>
+      <rect class="box" x="8" y="140" width="444" height="24" rx="4"/>
+      <text class="lbl s8" x="230" y="155" text-anchor="middle">physical: fiber · copper · radio — shared by everyone, reserved for no one</text>
+
+      <text class="lbl s8" x="230" y="178" text-anchor="middle">each layer adds state in RAM · WebSocket (→ L09) = HTTP upgraded to a 2-way pipe</text>
+    </svg>
+  </div>
+
+  <!-- CTRL+C FIELD GUIDE -->
+  <div class="panel span5">
+    <h2>⑥ Ctrl+C field guide — same key, opposite fates</h2>
+    <svg viewBox="0 0 460 158" role="img" aria-label="Ctrl+C on curl kills the local process and the kernel sends FIN, closing the connection; Ctrl+C inside ssh travels over the connection to kill the remote process while the connection survives">
+      <text class="c-text" x="8" y="14" font-weight="700" style="font-size:9px">^C on curl → connection DIES</text>
+      <rect class="box" x="8" y="22" width="54" height="24" rx="4"/>
+      <text class="lbl s8" x="35" y="37" text-anchor="middle">curl ☠</text>
+      <line class="wire c-stroke" x1="62" y1="34" x2="398" y2="34" opacity="0.5"/>
+      <g><circle class="c-fill ctrlc-dot" cx="66" cy="34" r="3.5"/></g>
+      <rect class="box" x="398" y="22" width="54" height="24" rx="4"/>
+      <text class="lbl s8" x="425" y="37" text-anchor="middle">server ✓</text>
+      <text class="lbl s8" x="8" y="58">SIGINT kills curl → the kernel outlives it and still sends FIN → server knows</text>
+
+      <line class="wire" x1="8" y1="68" x2="452" y2="68" stroke-dasharray="2 4"/>
+
+      <text class="a-text" x="8" y="82" font-weight="700" style="font-size:9px">^C in ssh → connection LIVES</text>
+      <rect class="box" x="8" y="90" width="54" height="24" rx="4"/>
+      <text class="lbl s8" x="35" y="105" text-anchor="middle">ssh ♥</text>
+      <line class="wire a-stroke" x1="62" y1="102" x2="398" y2="102" opacity="0.6"/>
+      <g><circle class="a-fill ctrlc-dot beat" cx="66" cy="102" r="3.5"/></g>
+      <rect class="box" x="398" y="90" width="54" height="24" rx="4"/>
+      <text class="lbl s8" x="425" y="105" text-anchor="middle">proc ☠</text>
+      <text class="lbl s8" x="8" y="126">the ^C byte rides the connection to the far end; the remote process dies</text>
+
+      <text class="lbl s8" x="8" y="144">lid-close mid-ssh = silence ③ — remote shell orphaned until sshd's heartbeat fails</text>
+      <text class="lbl s8" x="8" y="156">that's why tmux exists: it keeps the session adoptable after your conn dies</text>
+    </svg>
+  </div>
+
+  <!-- PAYOFF: GATEWAY MATH -->
+  <div class="panel span7">
+    <h2 style="color:var(--amber)">⑦ The payoff — one push-gateway box, sized in your head</h2>
+    <svg viewBox="0 0 660 158" role="img" aria-label="One event-loop gateway holds a million connections: about thirty gigabytes of RAM, thirty-three thousand heartbeats per second, and a thirty-second ghost window">
+      <g class="c-fill">
+        <circle cx="14" cy="34" r="3.5"/><circle cx="30" cy="34" r="3.5"/>
+        <circle cx="14" cy="50" r="3.5"/><circle cx="30" cy="50" r="3.5"/>
+        <circle cx="14" cy="66" r="3.5"/><circle class="blink" cx="30" cy="66" r="3.5"/>
+        <circle cx="14" cy="82" r="3.5"/><circle cx="30" cy="82" r="3.5"/>
+      </g>
+      <text class="lbl s8" x="26" y="100" text-anchor="middle">1M phones</text>
+      <g class="wire" opacity="0.4">
+        <line x1="36" y1="34" x2="86" y2="52"/><line x1="36" y1="50" x2="86" y2="56"/>
+        <line x1="36" y1="66" x2="86" y2="62"/><line x1="36" y1="82" x2="86" y2="66"/>
+      </g>
+      <rect class="box" x="86" y="34" width="132" height="52" rx="6" stroke="var(--amber)"/>
+      <text class="lbl-strong" x="152" y="54" text-anchor="middle">gateway server</text>
+      <text class="lbl s8" x="152" y="68" text-anchor="middle">event loop + epoll</text>
+      <text class="lbl s8" x="152" y="100" text-anchor="middle">× 100 boxes ⇒ 100M users</text>
+      <line class="wire" x1="218" y1="60" x2="248" y2="60"/>
+
+      <rect x="250" y="30" width="120" height="56" rx="6" fill="var(--amber-soft)" stroke="var(--amber)"/>
+      <text class="a-text" x="310" y="52" text-anchor="middle" font-weight="700" style="font-size:14px">≈ 30 GB</text>
+      <text class="lbl s8" x="310" y="66" text-anchor="middle">RAM, unswappable</text>
+      <text class="lbl s8" x="310" y="78" text-anchor="middle">30 KB × 1M conns</text>
+
+      <rect x="388" y="30" width="120" height="56" rx="6" fill="var(--cyan-soft)" stroke="var(--cyan)"/>
+      <text class="c-text" x="448" y="52" text-anchor="middle" font-weight="700" style="font-size:14px">≈ 33k/s</text>
+      <text class="lbl s8" x="448" y="66" text-anchor="middle">heartbeats to absorb</text>
+      <text class="lbl s8" x="448" y="78" text-anchor="middle">1M ÷ 30 s</text>
+
+      <rect x="526" y="30" width="120" height="56" rx="6" fill="var(--amber-soft)" stroke="var(--amber)"/>
+      <text class="a-text" x="586" y="52" text-anchor="middle" font-weight="700" style="font-size:14px">≤ 30 s</text>
+      <text class="lbl s8" x="586" y="66" text-anchor="middle">ghost window</text>
+      <text class="lbl s8" x="586" y="78" text-anchor="middle">dead-but-ESTABLISHED</text>
+
+      <line class="wire" x1="8" y1="112" x2="652" y2="112"/>
+      <text class="lbl s8" x="8" y="128">ghosts ③ are pushed to until a heartbeat fails — why pull fallback is not optional (→ L10)</text>
+      <text class="lbl s8" x="8" y="141">1,000 gateways: which one holds user X's socket right now? = the presence problem (→ L09)</text>
+      <text class="lbl s8" x="8" y="154">this is L01's “push costs a connection per client, 24/7” — now with actual numbers on it</text>
+    </svg>
+  </div>
+
+</div>
+</body>
+</html>

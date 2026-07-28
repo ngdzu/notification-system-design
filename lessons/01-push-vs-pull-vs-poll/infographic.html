@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>L01 · Push vs. Pull vs. Poll</title>
+<link rel="stylesheet" href="../assets/course.css" />
+<script defer src="../assets/diagrams.js"></script>
+</head>
+<body class="poster-page">
+<div class="poster">
+
+  <div class="hdr">
+    <span class="badge">L01</span>
+    <h1>Push vs. Pull vs. Poll</h1>
+    <span class="sub">three ways to move a message · and the trade-off that rules the whole course</span>
+  </div>
+
+  <!-- PUSH -->
+  <div class="panel span4">
+    <h2 style="color:var(--amber)">① Push — server calls you</h2>
+    <nc-actors mode="push"></nc-actors>
+    <div class="verdicts">
+      <span class="chip good a">latency ≈ 0s</span>
+      <span class="chip">cost: connection per client, 24/7</span>
+    </div>
+  </div>
+
+  <!-- PULL -->
+  <div class="panel span4">
+    <h2 style="color:var(--cyan)">② Pull — you ask the server</h2>
+    <nc-actors mode="poll"></nc-actors>
+    <div class="verdicts">
+      <span class="chip good c">survives disconnects</span>
+      <span class="chip">latency ≤ poll interval</span>
+    </div>
+  </div>
+
+  <!-- HYBRID -->
+  <div class="panel span4">
+    <h2>③ Hybrid — what real systems run</h2>
+    <nc-actors mode="hybrid"></nc-actors>
+    <div class="verdicts">
+      <span class="chip good a">push when connected</span>
+      <span class="chip good c">pull after reconnect / on app-open</span>
+    </div>
+  </div>
+
+  <!-- TIMELINE -->
+  <div class="panel span7">
+    <h2>Same event, two arrival times</h2>
+    <svg viewBox="0 0 560 128" role="img" aria-label="Timeline: an event at t=0 is push-delivered in under a second, but a 30-second poller waits up to a full interval">
+      <line class="wire" x1="24" y1="108" x2="540" y2="108"/>
+      <text class="lbl" x="100" y="122" text-anchor="middle">t = 0</text>
+      <text class="lbl" x="310" y="122" text-anchor="middle">t = 30 s</text>
+      <text class="lbl" x="520" y="122" text-anchor="middle">t = 60 s</text>
+
+      <line x1="100" y1="16" x2="100" y2="108" stroke="var(--text)" stroke-width="1" stroke-dasharray="2 3" opacity="0.6"/>
+      <path d="M100 8 l4 7 h-8 z" fill="var(--text)"/>
+      <text class="lbl-strong" x="108" y="15">event happens (“Alice liked your post”)</text>
+
+      <text class="lbl a-text" x="24" y="48" font-weight="700">PUSH</text>
+      <line class="a-stroke" x1="60" y1="44" x2="540" y2="44" opacity="0.25" stroke-width="1.5"/>
+      <circle class="a-fill" cx="106" cy="44" r="5"/>
+      <text class="lbl a-text" x="116" y="40">delivered &lt; 1 s</text>
+
+      <text class="lbl c-text" x="24" y="88" font-weight="700">POLL</text>
+      <line class="c-stroke" x1="60" y1="84" x2="540" y2="84" opacity="0.25" stroke-width="1.5"/>
+      <rect x="100" y="74" width="210" height="20" fill="var(--cyan)" opacity="0.12"/>
+      <g stroke="var(--cyan)" stroke-width="2">
+        <line x1="60"  y1="76" x2="60"  y2="92"/>
+        <line x1="310" y1="76" x2="310" y2="92"/>
+        <line x1="540" y1="76" x2="540" y2="92" opacity="0.4"/>
+      </g>
+      <text class="lbl c-text" x="60" y="70" text-anchor="middle">poll (just missed!)</text>
+      <circle class="c-fill" cx="310" cy="84" r="5"/>
+      <text class="lbl c-text" x="320" y="70">next poll → delivered at 30 s</text>
+      <text class="lbl" x="205" y="102" text-anchor="middle">waits up to one full interval</text>
+    </svg>
+  </div>
+
+  <!-- TENSION -->
+  <div class="panel span5">
+    <h2>The core tension — every lesson picks a point on this beam</h2>
+    <svg viewBox="0 0 260 96" role="img" aria-label="Seesaw balancing low latency against high throughput">
+      <g transform="rotate(-7 130 62)">
+        <rect x="20" y="58" width="220" height="5" rx="2.5" fill="var(--dim)"/>
+        <rect x="26" y="30" width="64" height="24" rx="4" fill="var(--amber-soft)" stroke="var(--amber)"/>
+        <text class="a-text" x="58" y="41" text-anchor="middle" font-size="8" font-weight="700">LATENCY ↓</text>
+        <text class="a-text" x="58" y="50" text-anchor="middle" font-size="7">push it all, now</text>
+        <rect x="172" y="32" width="64" height="24" rx="4" fill="var(--cyan-soft)" stroke="var(--cyan)"/>
+        <text class="c-text" x="204" y="43" text-anchor="middle" font-size="8" font-weight="700">THROUGHPUT ↑</text>
+        <text class="c-text" x="204" y="52" text-anchor="middle" font-size="7">batch &amp; queue</text>
+      </g>
+      <path d="M130 64 l-13 22 h26 z" fill="var(--surface-2)" stroke="var(--line)"/>
+      <text class="lbl" x="130" y="94" text-anchor="middle" font-size="7.5">speed for one user  ⇄  survival at millions</text>
+    </svg>
+    <div class="verdicts">
+      <span class="chip good a">latency = how fast one message lands</span>
+      <span class="chip good c">throughput = how many msgs/sec total</span>
+    </div>
+  </div>
+
+  <!-- FAN-OUT -->
+  <div class="panel span12">
+    <h2>Why scale bites: fan-out — 1 event → N notifications</h2>
+    <svg viewBox="0 0 1150 88" role="img" aria-label="One event fans out into millions of notifications">
+      <text class="lbl-strong" x="60" y="14" text-anchor="middle">1 event</text>
+      <circle cx="60" cy="36" r="10" fill="var(--amber)"/>
+      <g class="wire" opacity="0.7">
+        <line class="fan-line" x1="70" y1="40" x2="170"  y2="62" style="animation-delay:0s"/>
+        <line class="fan-line" x1="70" y1="40" x2="230"  y2="62" style="animation-delay:.15s"/>
+        <line class="fan-line" x1="70" y1="40" x2="290"  y2="62" style="animation-delay:.3s"/>
+        <line class="fan-line" x1="70" y1="40" x2="350"  y2="62" style="animation-delay:.45s"/>
+        <line class="fan-line" x1="70" y1="40" x2="410"  y2="62" style="animation-delay:.6s"/>
+        <line class="fan-line" x1="70" y1="40" x2="470"  y2="62" style="animation-delay:.75s"/>
+        <line class="fan-line" x1="70" y1="40" x2="530"  y2="62" style="animation-delay:.9s"/>
+        <line class="fan-line" x1="70" y1="40" x2="590"  y2="62" style="animation-delay:1.05s"/>
+        <line class="fan-line" x1="70" y1="40" x2="650"  y2="62" style="animation-delay:1.2s"/>
+        <line class="fan-line" x1="70" y1="40" x2="710"  y2="62" style="animation-delay:1.35s"/>
+        <line class="fan-line" x1="70" y1="40" x2="770"  y2="62" style="animation-delay:1.5s"/>
+        <line class="fan-line" x1="70" y1="40" x2="830"  y2="62" style="animation-delay:1.65s"/>
+        <line class="fan-line" x1="70" y1="40" x2="890"  y2="62" style="animation-delay:1.8s"/>
+        <line class="fan-line" x1="70" y1="40" x2="950"  y2="62" style="animation-delay:1.95s"/>
+        <line class="fan-line" x1="70" y1="40" x2="1010" y2="62" style="animation-delay:2.1s"/>
+        <line class="fan-line" x1="70" y1="40" x2="1070" y2="62" style="animation-delay:2.25s"/>
+      </g>
+      <g fill="var(--cyan)">
+        <circle cx="170" cy="66" r="4"/><circle cx="230" cy="66" r="4"/><circle cx="290" cy="66" r="4"/>
+        <circle cx="350" cy="66" r="4"/><circle cx="410" cy="66" r="4"/><circle cx="470" cy="66" r="4"/>
+        <circle cx="530" cy="66" r="4"/><circle cx="590" cy="66" r="4"/><circle cx="650" cy="66" r="4"/>
+        <circle cx="710" cy="66" r="4"/><circle cx="770" cy="66" r="4"/><circle cx="830" cy="66" r="4"/>
+        <circle cx="890" cy="66" r="4"/><circle cx="950" cy="66" r="4"/><circle cx="1010" cy="66" r="4"/>
+        <circle cx="1070" cy="66" r="4"/>
+      </g>
+      <text class="lbl" x="620" y="84" text-anchor="middle">celebrity posts → 5,000,000 sends in seconds · every one needs push-or-poll delivery, instantly (→ L05, the celebrity problem)</text>
+    </svg>
+  </div>
+
+</div>
+</body>
+</html>

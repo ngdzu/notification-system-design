@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Lesson 1 — Push vs. Pull vs. Poll (interactive)</title>
+<link rel="stylesheet" href="../assets/course.css" />
+<script defer src="../assets/diagrams.js"></script>
+</head>
+<body class="doc-page">
+<div class="wrap">
+
+  <div class="hdr"><span class="badge">L01</span>
+    <span class="mono" style="font-size:11px;letter-spacing:0.12em;text-transform:uppercase;color:var(--dim)">notification systems at scale · module 1</span>
+  </div>
+  <h1>Why Notification Systems Are Hard at Scale (Push vs. Pull vs. Poll)</h1>
+
+  <h2>Why this matters</h2>
+  <p>
+    Sending one notification is trivial — call an API, show a banner, done. The hard
+    part shows up the moment you have hundreds of millions of users: one popular post
+    can trigger millions of notifications in seconds, and every one has to arrive fast
+    without knocking the system over. Before designing anything, we need a shared
+    vocabulary for what a notification even is and the basic strategies for delivering it.
+  </p>
+
+  <h2>What is a notification, really?</h2>
+  <p>
+    A <strong>notification</strong> is a small, timely message telling a user something
+    happened — “Alice liked your photo,” “Your order shipped.” It's <em>small</em> (a few
+    lines of text plus an ID or link) and <em>timely</em> (it loses most of its value if it
+    arrives an hour late instead of seconds late). That combination — tiny payload, strict
+    freshness — is why notification systems are their own design problem.
+  </p>
+
+  <h2>Strategy ① — push: the server calls you</h2>
+  <p>
+    <span class="term a">Push</span> means the server proactively sends data the instant
+    it's ready, without the client asking. Like a phone ringing: the caller initiates, you
+    just react. It requires the server to hold an always-open channel to every connected
+    client — somewhere to push <em>to</em>. Watch it below: messages stream the moment
+    they exist.
+  </p>
+  <div class="demo">
+    <nc-actors mode="push"></nc-actors>
+    <div class="cap">Push: near-zero delay, but the server pays for every open connection, 24/7, whether or not anything happens.</div>
+  </div>
+
+  <h2>Strategy ② — pull: you ask the server</h2>
+  <p>
+    <span class="term c">Pull</span> means the client asks “anything new for me?” on its
+    own initiative — like checking your mailbox: nobody rings your doorbell, you walk out
+    and look. Pulling on a fixed schedule (“check every 30 seconds”) is called
+    <span class="term c">polling</span>. It's simpler and more robust — if the network
+    drops, the client just asks again later — but notifications sit waiting on the server
+    until the next ask.
+  </p>
+  <div class="demo">
+    <nc-actors mode="poll"></nc-actors>
+    <div class="cap">Pull: the hollow dot is the client's question; the solid dot is the server's answer. In between — silence, even if news is waiting.</div>
+  </div>
+
+  <h2>Try it — pick a polling interval</h2>
+  <p>
+    Here's the trap: “just poll faster” sounds free. Drag the slider and watch what a
+    polling interval costs at 100&nbsp;million users — this is the first real
+    latency-versus-load trade-off of the course.
+  </p>
+  <div class="demo sim">
+    <div class="sim-row">
+      <label for="ival">poll every</label>
+      <input type="range" id="ival" min="0" max="100" value="55" />
+      <span class="val" id="ivalOut">30 s</span>
+    </div>
+    <div class="stats">
+      <div class="stat warn"><div class="k">worst-case latency</div><div class="v" id="lat">30 s</div></div>
+      <div class="stat"><div class="k">requests / client / day</div><div class="v" id="rpd">2,880</div></div>
+      <div class="stat warn"><div class="k">server load @100M users</div><div class="v" id="rps">3.3M req/s</div></div>
+      <div class="stat ok"><div class="k">…that find nothing*</div><div class="v" id="waste">~97%</div></div>
+    </div>
+    <div class="meter"><div id="meterFill" style="width:40%"></div></div>
+    <div class="cap" id="verdict">*assuming a typical user gets ~100 notifications/day — nearly every poll comes back empty.
+      Faster polling buys latency with an avalanche of useless requests. This is why nobody polls every second, and why push exists.</div>
+  </div>
+
+  <h2>Strategy ③ — hybrid: what real systems run</h2>
+  <p>
+    Almost every real notification system is a <strong>hybrid</strong>: push as the fast
+    path, pull as the safety net. The client gets pushes while its connection is alive;
+    when the connection drops (subway, dead battery, flaky Wi-Fi) or the app reopens
+    after hours away, it pulls once to catch up on anything it missed. Lesson 8 covers
+    the push machinery in detail, and Lesson 10 makes pull a first-class fallback rather
+    than an afterthought.
+  </p>
+
+  <h2>The core tension: latency vs. throughput</h2>
+  <p>
+    Two words will follow you through all 17 lessons.
+    <span class="term a">Latency</span> is how long delivery takes — event happens →
+    user sees it. <span class="term c">Throughput</span> is how many messages the whole
+    system can process per second — what decides whether you survive a celebrity posting
+    to 5 million followers. They pull in opposite directions: pushing everything
+    instantly minimizes latency but maximizes constant load; batching, queuing, and
+    polling raise throughput capacity at the cost of delay. The timeline below shows the
+    same event landing on two clients:
+  </p>
+  <div class="demo">
+    <svg viewBox="0 0 560 128" role="img" aria-label="Timeline: push delivers in under a second; a 30-second poller waits up to a full interval">
+      <line class="wire" x1="24" y1="108" x2="540" y2="108"/>
+      <text class="lbl" x="100" y="122" text-anchor="middle">t = 0</text>
+      <text class="lbl" x="310" y="122" text-anchor="middle">t = 30 s</text>
+      <text class="lbl" x="520" y="122" text-anchor="middle">t = 60 s</text>
+      <line x1="100" y1="16" x2="100" y2="108" stroke="var(--text)" stroke-width="1" stroke-dasharray="2 3" opacity="0.6"/>
+      <path d="M100 8 l4 7 h-8 z" fill="var(--text)"/>
+      <text class="lbl-strong" x="108" y="15">event happens</text>
+      <text class="lbl a-text" x="24" y="48" font-weight="700">PUSH</text>
+      <line class="a-stroke" x1="60" y1="44" x2="540" y2="44" opacity="0.25" stroke-width="1.5"/>
+      <circle class="a-fill" cx="106" cy="44" r="5"/>
+      <text class="lbl a-text" x="116" y="40">delivered &lt; 1 s</text>
+      <text class="lbl c-text" x="24" y="88" font-weight="700">POLL</text>
+      <line class="c-stroke" x1="60" y1="84" x2="540" y2="84" opacity="0.25" stroke-width="1.5"/>
+      <rect x="100" y="74" width="210" height="20" fill="var(--cyan)" opacity="0.12"/>
+      <g stroke="var(--cyan)" stroke-width="2">
+        <line x1="60" y1="76" x2="60" y2="92"/>
+        <line x1="310" y1="76" x2="310" y2="92"/>
+        <line x1="540" y1="76" x2="540" y2="92" opacity="0.4"/>
+      </g>
+      <text class="lbl c-text" x="60" y="70" text-anchor="middle">poll (just missed!)</text>
+      <circle class="c-fill" cx="310" cy="84" r="5"/>
+      <text class="lbl c-text" x="320" y="70">next poll → delivered at 30 s</text>
+      <text class="lbl" x="205" y="102" text-anchor="middle">waits up to one full interval</text>
+    </svg>
+    <div class="cap">Nearly every design decision later in the course — fan-out strategy (L4), broker design (L6), backpressure (L13) — is picking a point on this trade-off.</div>
+  </div>
+
+  <h2>Recap</h2>
+  <div class="recap">
+    <ul>
+      <li><strong>Notification</strong> = small, timely message — freshness is part of its value.</li>
+      <li><strong>Push:</strong> server-initiated, lowest latency, pays an always-on cost per connected client.</li>
+      <li><strong>Pull / polling:</strong> client-initiated, resilient, latency bounded by the poll interval — and mostly wasted requests.</li>
+      <li>Real systems are <strong>hybrids</strong> — push first, pull as the safety net.</li>
+      <li><strong>Latency vs. throughput</strong> is the single trade-off every later lesson revisits.</li>
+    </ul>
+  </div>
+
+  <h2>Check yourself</h2>
+  <div class="check">
+    <ol>
+      <li>Why isn't polling every 5 seconds simply “better” than polling every 60 seconds, if it gets notifications to users faster? (The slider above holds the answer.)</li>
+      <li>A client's push connection just dropped for 10 minutes. Why does even a “push” system need a pull-based fallback?</li>
+    </ol>
+  </div>
+
+</div>
+
+<script>
+(function () {
+  // logarithmic slider: 1s .. 300s
+  var slider = document.getElementById("ival");
+  var out = document.getElementById("ivalOut");
+  var lat = document.getElementById("lat");
+  var rpd = document.getElementById("rpd");
+  var rps = document.getElementById("rps");
+  var waste = document.getElementById("waste");
+  var fill = document.getElementById("meterFill");
+
+  function fmt(n) {
+    if (n >= 1e6) return (n / 1e6).toFixed(1) + "M";
+    if (n >= 1e3) return (n / 1e3).toFixed(1) + "k";
+    return String(Math.round(n));
+  }
+  function update() {
+    var t = slider.value / 100;                      // 0..1
+    var secs = Math.round(Math.exp(Math.log(1) + t * (Math.log(300) - Math.log(1))));
+    out.textContent = secs >= 60 ? (secs / 60).toFixed(1).replace(/\.0$/, "") + " min" : secs + " s";
+    lat.textContent = out.textContent;
+    var perDay = 86400 / secs;
+    rpd.textContent = fmt(perDay).replace(/\.0([Mk])/, "$1");
+    var load = 1e8 / secs;                           // 100M clients
+    rps.textContent = fmt(load) + " req/s";
+    var hitRate = Math.min(1, 100 / perDay);         // ~100 notifications/day
+    waste.textContent = "~" + Math.round((1 - hitRate) * 100) + "%";
+    fill.style.width = Math.round((1 - t) * 100) + "%";
+  }
+  slider.addEventListener("input", update);
+  update();
+})();
+</script>
+</body>
+</html>
