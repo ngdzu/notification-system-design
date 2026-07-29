@@ -1,5 +1,5 @@
 {
-  "last_sent_lesson": 5,
+  "last_sent_lesson": 6,
   "sent_history": [
     {
       "num": 1,
@@ -20,6 +20,10 @@
     {
       "num": 5,
       "slug": "05-celebrity-problem-hot-keys"
+    },
+    {
+      "num": 6,
+      "slug": "06-message-brokers-and-queues"
     }
   ]
 }
