@@ -17,16 +17,10 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v5
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - name: Install Pandoc
+        uses: pandoc/actions/setup@v1
         with:
-          node-version: '20'
-
-      - name: Install Pandoc, Chromium & Mermaid Filter
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y pandoc chromium-browser
-          npm install -g @mermaid-js/mermaid-cli mermaid-filter
+          version: 3.6.4
 
       - name: Send Next Lesson to Kindle
         env:
@@ -35,14 +29,12 @@ jobs:
           KINDLE_EMAIL: ${{ secrets.KINDLE_EMAIL }}
           SMTP_SERVER: "smtp.gmail.com"
           SMTP_PORT: "587"
-          PUPPETEER_EXECUTABLE_PATH: "/usr/bin/chromium-browser"
-          PUPPETEER_SKIP_CHROMIUM_DOWNLOAD: "true"
         run: |
           python3 scripts/send_to_kindle.py
 
-      - name: Commit state and generated lessons
+      - name: Commit state update
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git add lessons/ .kindle_state.json
+          git add .kindle_state.json
           git diff --quiet && git diff --staged --quiet || (git commit -m "Automated update: sent daily lesson to Kindle" && git push)

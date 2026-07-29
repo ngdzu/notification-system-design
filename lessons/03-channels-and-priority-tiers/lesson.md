@@ -21,6 +21,14 @@ sure urgent traffic doesn't get stuck behind a parade of bulk messages).
 A **channel** is a specific path through which a notification reaches a user's
 eyes. Most large-scale systems support four:
 
+```mermaid
+flowchart LR
+    DW[Delivery Worker] --> Push["Push Notification\n(APNs / FCM)"]
+    DW --> InApp["In-App / In-Feed\n(bell icon, activity feed)"]
+    DW --> Email["Email\n(SMTP)"]
+    DW --> SMS["SMS\n(Twilio, SNS)"]
+```
+
 ### 1. Push notification
 
 A short message sent by a remote server to a user's phone or browser, even
@@ -57,17 +65,22 @@ the country) — and regulatory complexity (opt-in laws, rate limits, country-
 specific rules). Most systems reserve SMS for security-critical messages like
 two-factor authentication codes.
 
-### Choosing channels
+### Choosing channels — the routing table
 
-In practice a single event often fans out to more than one channel. A password
-change might go to push *and* email *and* SMS, because the stakes are high
-enough that you want every path covered. A "someone you follow posted" update
-might go only to push and in-app, because email and SMS would be overkill.
-The decision of which channels to use for a given notification type is
-usually stored in a configuration table — sometimes called a **channel
-routing table** — that maps each notification type to its allowed channels
-and respects each user's preferences (e.g., "I turned off push for marketing
-messages").
+In practice a single event often fans out to more than one channel. The
+decision of which channels to use for a given notification type is stored in a
+**channel routing table** that maps each notification type to its allowed
+channels and respects each user's preferences.
+
+```mermaid
+flowchart TD
+    Event["Notification Event"] --> RT["Channel Routing Table"]
+    RT --> Check{"User Preferences\n& Notification Type"}
+    Check -->|"password_changed"| Multi["Push + Email + SMS"]
+    Check -->|"new_follower"| Dual["Push + In-App"]
+    Check -->|"weekly_digest"| Single["Email only"]
+    Check -->|"2FA code"| Secure["SMS + Push"]
+```
 
 ---
 
@@ -95,17 +108,25 @@ launched a new feature," "Your weekly digest is ready," "People you follow have
 been posting." These are "best-effort" — nice to have, but a few-minute delay
 or even a small drop rate is acceptable.
 
-The line between the two is not always crisp (a "someone liked your photo"
-update sits somewhere in the middle), but the mental model is simple: *would
-the user notice and care if this message arrived five minutes late?* If yes,
-it is transactional. If no, it is bulk.
-
 ### Priority queues: separate lanes for separate urgency
 
 A **priority queue** is a queue where messages with higher priority are
 processed before messages with lower priority, regardless of arrival order.
 Think of it like a hospital emergency room: a heart attack patient is seen
 before someone with a sprained ankle, even if the ankle patient arrived first.
+
+```mermaid
+flowchart LR
+    Ingestion["Ingestion Service\n(assigns priority)"] --> P0["🔴 P0: Critical\n2FA, security alerts"]
+    Ingestion --> P1["🟡 P1: Standard\nlikes, comments, DMs"]
+    Ingestion --> P2["🟢 P2: Bulk\ncampaigns, digests"]
+
+    P0 --> W1["Worker Pool\n(processes P0 first)"]
+    P1 --> W1
+    P2 --> W1
+
+    W1 --> Channels["Delivery Channels"]
+```
 
 In a notification system this is typically implemented by running **multiple
 physical queues** — one per priority tier — rather than a single queue with
@@ -135,9 +156,23 @@ just respect the priority tag they receive.
 
 ## How this connects to the architecture
 
-Look back at the Lesson 2 pipeline:
+Here is the Lesson 2 pipeline, now expanded with channels and priority tiers:
 
-**Producer → Ingestion Service → Fan-Out Service → Queue → Delivery Worker → Channel**
+```mermaid
+flowchart LR
+    P["Producer\n(event happens)"] --> I["Ingestion Service\n(validates + assigns priority)"]
+    I --> FO["Fan-Out Service\n(determines recipients)"]
+    FO --> Q0["P0 Queue\n(critical)"]
+    FO --> Q1["P1 Queue\n(standard)"]
+    FO --> Q2["P2 Queue\n(bulk)"]
+    Q0 --> DW["Delivery Workers"]
+    Q1 --> DW
+    Q2 --> DW
+    DW --> Push["Push"]
+    DW --> InApp["In-App"]
+    DW --> Email["Email"]
+    DW --> SMS["SMS"]
+```
 
 Today's lesson zoomed into two spots:
 

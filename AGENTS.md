@@ -132,6 +132,11 @@ When asked to write, continue, or expand a lesson:
    - Reference real systems (Kafka, APNs, FCM, Redis, DynamoDB, etc.) where it
      helps ground the concept, but keep the explanation generic enough to be
      portable to any interview, not tied to one vendor's API.
+   - **Diagrams:** include 2-4 Mermaid diagrams per lesson (```mermaid blocks)
+     to illustrate architecture, flows, and relationships. Use flowcharts for
+     pipelines and data flow, sequence diagrams for request/response patterns,
+     and simple graphs for comparisons. Diagrams should be self-explanatory
+     with clear labels — they are a primary teaching tool, not decoration.
    - Avoid code/pseudocode unless it's the clearest way to explain a specific
      mechanism (e.g. a token bucket rate limiter). This is conceptual/
      architecture study, not an implementation exercise.
