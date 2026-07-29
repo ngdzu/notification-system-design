@@ -2,149 +2,206 @@
 
 ## Why this matters
 
-You might assume that "sending a push notification" means your server opens a
-connection to a user's phone and delivers a message. It doesn't work that way.
-You can't reach a phone directly — mobile networks, battery optimization, and
-OS security all stand in the way. Instead, every push notification you've ever
-received on a phone was routed through a middleman operated by the device's OS
+Your server cannot reach a phone directly. Mobile networks, battery
+optimization, and OS security all block it. Every push notification you have
+ever received was routed through a middleman operated by the device's OS
 vendor. Understanding how that relay works — and the constraints it imposes —
-is essential before you can design a delivery pipeline that actually reaches
-100M+ devices.
+is essential before you can design a delivery pipeline that reaches 100M+
+devices.
 
 ## The push notification service: your mandatory middleman
 
 A **push notification service** (PNS) is a cloud service run by the OS vendor
-that acts as the sole gateway for delivering push notifications to devices
-running that OS. Apple runs **APNs** (Apple Push Notification service) for iOS
-and macOS. Google runs **FCM** (Firebase Cloud Messaging) for Android. There
-is no way around them — the operating system will not let a third-party server
-wake up an app or show a banner without going through its PNS.
+that acts as the sole gateway for delivering push notifications to devices.
+Apple runs **APNs** (Apple Push Notification service) for iOS and macOS.
+Google runs **FCM** (Firebase Cloud Messaging) for Android. The operating
+system will not let a third-party server wake an app or show a banner without
+going through its PNS.
 
-Think of it like sending mail through the postal service. You can't walk up to
-someone's front door in a gated community and slide a letter under it — you
-hand the letter to the postal service, and they deliver it. APNs and FCM are
-that postal service. Your server talks to them over an API, and they handle
-the last hop to the device.
+Think of it like sending mail to a gated community. You cannot walk up to
+someone's front door — you hand the letter to the postal service, and they
+deliver it. APNs and FCM are that postal service.
 
-Why do OS vendors force this? Two main reasons:
+Why do OS vendors force this?
 
-1. **Battery life.** If every app maintained its own persistent connection to
-   its own server, the radio would never sleep and the battery would drain in
-   hours. Instead, the OS keeps one single persistent connection to its PNS.
-   All apps share that connection.
-2. **Security and control.** The OS can enforce permission rules (the user
-   said "no notifications for this app"), rate limits, and payload
-   restrictions before anything reaches the screen.
+1. **Battery life.** If every app kept its own persistent connection to its
+   server, the radio would never sleep and the battery would drain in hours.
+   The OS keeps one single persistent connection to its PNS, shared by all
+   apps.
+2. **Security and control.** The OS enforces permission rules, rate limits,
+   and payload restrictions before anything reaches the screen.
+
+The diagram below shows the full delivery path from your server to a device,
+including the success and failure branches the PNS can return:
+
+```mermaid
+sequenceDiagram
+    participant Server as Your Server
+    participant PNS as APNs or FCM
+    participant Device as User Device
+
+    Server->>PNS: HTTP/2 request with payload + device token
+    PNS->>PNS: Validate token and payload
+
+    alt Token valid, payload under 4 KB
+        PNS->>Device: Deliver notification over persistent connection
+        Device->>Device: OS displays alert or wakes app
+        PNS-->>Server: 200 OK
+    else Invalid or expired token
+        PNS-->>Server: 410 Gone (prune this token)
+    else Payload too large
+        PNS-->>Server: 413 Payload Too Large
+    end
+```
+
+Your server never talks to the device directly. It talks to the PNS, and the
+PNS handles the last hop over its persistent OS-level connection to the device.
 
 ## Device tokens: addressing a specific app on a specific phone
 
 When your app is installed and the user grants notification permission, the
 app registers with the PNS. The PNS returns a **device token** — a long,
-opaque string (typically 64–256 characters) that uniquely identifies *this
-app install on this device*. It is not a phone number, not a user ID, not a
-device ID. It is specific to the combination of one app and one device.
+opaque string that uniquely identifies *this app install on this device*. It
+is not a phone number, not a user ID, not a device serial number.
 
-Key properties of device tokens:
+Key properties:
 
-- **One token per app per device.** If a user installs your app on a phone
-  and a tablet, you get two different tokens.
-- **Tokens can change.** The OS can rotate a device token at any time — after
-  an OS update, after restoring from backup, or just periodically. Your
-  server must always accept fresh tokens from the app and update its records.
-- **Tokens expire or become invalid.** If a user uninstalls the app, the
-  token is dead. APNs and FCM will tell you (via error responses or a
-  feedback service) when a token is no longer valid. You must stop sending
-  to dead tokens, or the PNS may throttle you.
+- **One token per app per device.** A user with an iPhone and an iPad has two
+  tokens for your app.
+- **Tokens can change.** The OS may rotate a token after an OS update, a
+  backup restore, or just periodically. Your server must always accept and
+  store fresh tokens from the app.
+- **Tokens expire or become invalid.** Uninstalling the app kills the token.
+  The PNS tells you via error responses (like the 410 Gone above). You must
+  prune dead tokens or risk being throttled.
 - **Tokens are platform-specific.** An APNs token only works with APNs; an
-  FCM token only works with FCM. Your server needs to know which PNS to call
-  for each token.
+  FCM token only works with FCM.
 
-In practice, your backend stores a mapping of `user_id -> [list of device
-tokens]`, each tagged with the platform (iOS or Android) so the delivery
-worker knows which PNS API to call.
+Here is the registration flow that happens when a user first installs your app
+and grants notification permission:
+
+```mermaid
+sequenceDiagram
+    participant App as Mobile App
+    participant OS as Device OS
+    participant PNS as APNs or FCM
+    participant Backend as Your Backend
+
+    App->>OS: Request notification permission
+    OS-->>App: Permission granted by user
+    App->>PNS: Register for push notifications
+    PNS-->>App: Return device token
+    App->>Backend: POST /device-tokens with token + platform tag
+    Backend->>Backend: Store user_id, token, platform (ios or android)
+    Note over Backend: Upsert on every app launch in case token rotated
+```
+
+Your backend stores a mapping of `user_id -> [list of device tokens]`, each
+tagged with the platform so delivery workers know which PNS API to call.
+Most users have two or three devices; some power users have many more.
 
 ## The payload: what you actually send
 
-The **payload** is the small JSON body that your server sends to the PNS along
-with the device token. It contains the title, body text, maybe a sound name
-or badge count, and any custom data your app needs to handle the notification
-(like a deep-link URL or a conversation ID).
+The **payload** is a small JSON body your server sends to the PNS along with
+the device token. It contains the notification title, body text, optional
+sound or badge count, and custom data your app needs — such as a deep-link
+URL or a conversation ID.
 
-The critical constraint is **size**. APNs allows a maximum payload of **4 KB**
-(4096 bytes). FCM allows up to **4 KB** for the notification portion of a
-message. That sounds generous until you realize it includes everything — the
-JSON structure itself, keys, values, and any custom data. In practice you have
-room for a short title, a one-or-two-sentence body, and a handful of small
-key-value pairs. You cannot stuff an image, a long article, or a complex data
-structure into a push payload.
+The critical constraint is **size**: both APNs and FCM cap the payload at
+roughly **4 KB**. In practice you have room for a short title, one or two
+sentences of body text, and a few small key-value pairs. You cannot put an
+image or a long article in a push payload.
 
-A simplified APNs payload looks like this:
+Below is a simplified breakdown of what a payload contains and how each
+section is used:
 
-```json
-{
-  "aps": {
-    "alert": {
-      "title": "New message",
-      "body": "Alice: Hey, are you coming tonight?"
-    },
-    "sound": "default",
-    "badge": 3
-  },
-  "conversation_id": "c-8821"
-}
+```mermaid
+flowchart TD
+    Payload[Push Payload - max 4 KB JSON]
+    Payload --> SystemKeys[System keys - aps for APNs]
+    Payload --> CustomKeys[Custom app data]
+
+    SystemKeys --> Alert[alert: title and body text]
+    SystemKeys --> Sound[sound: default or custom file name]
+    SystemKeys --> Badge[badge: number shown on app icon]
+    SystemKeys --> ContentAvail[content-available: 1 for silent push]
+
+    CustomKeys --> DeepLink[deep_link: screen to open on tap]
+    CustomKeys --> ConvID[conversation_id or entity ID]
+    CustomKeys --> ActionHint[action: like reply or accept]
 ```
-
-An FCM payload follows a different schema but carries the same kinds of
-fields: a `notification` block for display, and a `data` block for custom
-key-value pairs.
 
 Because the payload is small, it is a *signal*, not the content itself. The
 notification tells the user something happened and gives the app just enough
-context to fetch the full content when the user taps it.
+context to fetch the full content when tapped.
 
-## Silent push / background push
+## Silent push and background push
 
-A **silent push** (Apple's term) or **background push** (general term) is a
-push notification that arrives on the device but shows nothing to the user —
-no banner, no sound, no badge. Instead, the OS wakes the app briefly in the
-background and hands it the payload. The app can then do a small amount of
-work: fetch new data from your server, update a local database, refresh a
-cache.
+A **silent push** (Apple's term) or **background push** is a push notification
+that arrives on the device but shows nothing to the user — no banner, no
+sound, no badge. The OS wakes the app briefly in the background and hands it
+the payload. The app can then fetch new data, update a local database, or
+refresh a cache before the user ever opens the app.
 
-Why would you send an invisible notification? Common use cases:
+You trigger a silent push on APNs by setting `"content-available": 1` in the
+`aps` dictionary and omitting the `alert` key. FCM has an equivalent
+`data`-only message type.
 
-- **Data sync.** A messaging app receives a silent push saying "new messages
-  available," fetches them, and has them ready when the user opens the app —
-  no loading spinner.
-- **Content pre-fetch.** A news app fetches the latest headlines in the
-  background so they're instantly visible on launch.
-- **State updates.** A ride-sharing app silently updates the driver's
-  location on the rider's phone without showing a visible alert every second.
+Common use cases:
 
-Silent pushes have stricter limits than visible ones. Apple throttles them
-aggressively — the system may delay or drop them if you send too many, and
-the OS gives your app only about 30 seconds of background execution time per
-wake-up. They are a best-effort mechanism, not a guaranteed delivery channel.
+- **Data sync.** A messaging app fetches new messages so they are ready when
+  the user opens the app — no loading spinner.
+- **Content pre-fetch.** A news app pulls fresh headlines in the background.
+- **State updates.** A ride-sharing app silently refreshes driver location
+  without showing an alert every few seconds.
 
-## How this fits in the architecture
+```mermaid
+sequenceDiagram
+    participant Server as Your Server
+    participant PNS as APNs or FCM
+    participant OS as Device OS
+    participant App as App Process - Background
 
-Recall from Lesson 2 that the notification system has delivery workers
-downstream of the message queue. Here is where those workers plug in:
+    Server->>PNS: Silent push payload - content-available 1, no alert
+    PNS->>OS: Deliver silent notification
+    OS->>App: Wake app process - up to 30 seconds runtime
+    App->>Server: GET /messages?since=last_sync
+    Server-->>App: Return new messages JSON
+    App->>App: Write to local database
+    App->>OS: Signal background task complete
+    Note over OS,App: User opens app and sees messages instantly - no spinner
+```
 
-1. A delivery worker picks a notification off the queue.
-2. It looks up the recipient's device tokens (and their platforms) from the
-   token store.
-3. For each token, it builds a payload and calls the appropriate PNS API —
-   APNs for iOS tokens, FCM for Android tokens.
-4. The PNS accepts the message (or rejects it with an error — invalid token,
-   payload too large, rate limited).
-5. The PNS handles the final delivery to the device over its persistent
-   connection.
+Silent pushes have stricter limits than regular pushes. Apple throttles them
+aggressively — the system may delay or drop them under battery pressure — and
+gives your app only about 30 seconds of background CPU time per wake-up.
+Treat silent push as best-effort, not guaranteed delivery.
 
-Your server never talks to the device directly. It talks to the PNS, and the
-PNS talks to the device. This means your server's job is to be a reliable,
-fast *client* of the APNs and FCM APIs — maintaining connection pools,
-handling errors and retries, and pruning dead tokens.
+## How delivery workers use all of this
+
+Recall from Lesson 2 that delivery workers sit downstream of the message
+queue. Here is how they plug into the push delivery path end to end:
+
+```mermaid
+flowchart LR
+    Queue[Message Queue] --> Worker[Delivery Worker]
+    Worker --> Lookup[Token Store Lookup]
+    Lookup --> iOS[Build APNs Payload]
+    Lookup --> Android[Build FCM Payload]
+    iOS --> APNs[APNs HTTP/2 API]
+    Android --> FCM[FCM HTTP v1 API]
+    APNs --> iDevice[iOS Device]
+    FCM --> aDevice[Android Device]
+    APNs -->|Invalid token 410| Prune[Prune Dead Tokens]
+    FCM -->|Unregistered| Prune
+```
+
+The worker picks a notification off the queue, looks up device tokens and
+their platforms, builds a per-platform payload, and calls the appropriate PNS
+API. The PNS accepts or rejects the message. Your server's job is to be a
+reliable, fast *client* of these APIs — maintaining HTTP/2 connection pools,
+handling errors with retries and backoff, and continuously pruning dead tokens
+to stay off throttle lists.
 
 ## Recap
 
@@ -152,20 +209,25 @@ handling errors and retries, and pruning dead tokens.
   **push notification service** — APNs for Apple, FCM for Google.
 - A **device token** uniquely identifies one app install on one device. Tokens
   change, expire, and are platform-specific. Your backend must keep them
-  up to date.
-- The **payload** is a small JSON body (max ~4 KB) that carries the alert
-  text and minimal custom data. It is a signal, not the full content.
+  current by accepting fresh tokens on every app launch.
+- The **payload** is a small JSON body (max ~4 KB) carrying alert text and
+  minimal custom data. It is a signal, not the full content.
 - A **silent/background push** shows nothing to the user but wakes the app
-  to do background work like data sync. It is throttled and best-effort.
-- Delivery workers in your system are clients of the PNS APIs. They look up
-  tokens, build payloads, and hand messages to APNs or FCM for final
-  delivery.
+  for background work like data sync. It is throttled, best-effort, and
+  capped at ~30 seconds of runtime.
+- Delivery workers are clients of the PNS APIs — they look up tokens, build
+  payloads, call APNs or FCM, and prune any tokens reported as dead.
 
 ## Check yourself
 
 1. A user installs your app on their iPhone and their iPad. How many device
-   tokens does your server store for that user, and why can't you use a
+   tokens does your server store for that user, and why can't you reuse a
    single token for both devices?
 
-2. You need to send a notification that includes a 10 KB image. Can you put
-   the image in the push payload? If not, what is the standard approach?
+2. You need to send a notification that includes a 10 KB thumbnail image. Can
+   you put the image in the push payload? If not, what is the standard
+   approach?
+
+3. You send a silent push to pre-fetch data. Two hours later the user opens
+   the app and sees stale content. What are two reasons the silent push might
+   not have triggered the background fetch?

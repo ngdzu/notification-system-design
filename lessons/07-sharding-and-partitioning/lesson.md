@@ -2,156 +2,178 @@
 
 ## Why this matters
 
-In previous lessons we introduced message brokers, fanout strategies, and
-priority tiers. All of those assume you can store and move notification data
-somewhere. But what happens when "somewhere" is a single database or a single
-queue, and you have 100 million users generating billions of notifications per
-day? The answer: it falls over. One machine has finite disk, finite memory, and
-finite throughput. This lesson is about the technique you reach for when one
-machine isn't enough — splitting data into smaller, independent pieces so many
-machines can share the load.
+Previous lessons covered message brokers, fanout strategies, and priority tiers.
+All of those assume your notification data lives somewhere. But when "somewhere"
+is a single database handling 100 million users generating billions of
+notifications per day, it falls over. One machine has finite disk, memory, and
+throughput. This lesson covers the technique for when one machine is not enough:
+splitting data into smaller, independent pieces across many machines.
 
 ## Core vocabulary
 
-A **partition** is a slice of your data that lives and operates independently
-from the other slices. If you have a billion notification rows, you might split
-them into 256 partitions so each partition only manages about four million rows.
-Each partition can be read and written without touching the others.
+A **partition** is an independent slice of your data. A billion notification rows
+might split into 256 partitions, each managing about four million rows. Each
+partition can be read and written without touching the others.
 
-A **shard** is essentially the same idea but usually refers to the physical
-machine (or database instance) that holds one or more partitions. In casual
-conversation — and in most interviews — people use "shard" and "partition"
-interchangeably. The important point is the same: you're dividing data so no
-single node has to handle everything.
+A **shard** is the physical machine or database instance holding one or more
+partitions. In interviews, "shard" and "partition" are used interchangeably. The
+key idea is the same: dividing data so no single node handles everything.
 
-A **partition key** is the field you use to decide which partition a given piece
-of data belongs to. For a notification system, the most natural partition key
-is the **user ID** — every notification targets a specific user, so you route
-it to the partition that owns that user. This means all of one user's
-notifications sit together, which keeps reads fast: when the app loads
-"show me my unread notifications," it only queries one partition instead of
-scanning all of them.
+A **partition key** is the field that decides which partition owns a piece of
+data. For notifications, the natural partition key is **user ID** — every
+notification targets a specific user, so you route it to that user's partition.
+All of one user's notifications sit together, keeping reads fast.
 
-## The mailroom analogy
+**Consistent hashing** is a way to assign keys to shards using a ring structure
+so that adding or removing a shard moves only a small fraction of data instead
+of reshuffling everything. More on this below.
 
-Imagine a company with 10,000 employees and one mailroom clerk sorting all
-incoming packages. At some point the clerk can't keep up — packages pile up,
-delivery slows, and the clerk becomes the bottleneck. The fix: hire ten clerks,
-assign each one a range of employee last names (A–C, D–F, …), and stamp every
-incoming package with the employee name so it goes straight to the right desk.
-Each clerk works independently, handles only their slice, and the total
-throughput is roughly ten times what one clerk could manage.
+## Single database bottleneck vs. sharded approach
 
-In this analogy the employee last name is the partition key, each clerk's desk
-is a shard, and the pile of packages at each desk is a partition.
+When all notification data lives in one database, every read and every write
+competes for the same disk, memory, and CPU. Scale the app servers all you want
+— the database is still the single choke point.
 
-## Why user ID is a good partition key
+```mermaid
+graph LR
+    A[App Server 1] --> DB[Single Database]
+    B[App Server 2] --> DB
+    C[App Server 3] --> DB
+    DB --> X[Bottleneck: disk and CPU maxed]
+```
 
-Choosing the right partition key matters more than it might seem. A good key
-has two properties:
+Sharding breaks that bottleneck by introducing a routing layer that sends each
+request to one of several independent databases. Each shard handles only its
+slice of users, so total throughput scales with the number of shards.
 
-1. **Even distribution.** You want each partition to get roughly the same
-   amount of data and traffic. User IDs that are randomly generated (UUIDs,
-   snowflake IDs) spread naturally across partitions. Sequential IDs can
-   work too as long as you hash them first.
+```mermaid
+graph LR
+    A[App Server 1] --> R[Router]
+    B[App Server 2] --> R
+    C[App Server 3] --> R
+    R --> S1[Shard 1: Users 0-33%]
+    R --> S2[Shard 2: Users 34-66%]
+    R --> S3[Shard 3: Users 67-100%]
+```
 
-2. **Query alignment.** Most notification reads are per-user — "give me this
-   user's last 50 notifications." If user ID is the partition key, that query
-   hits exactly one partition. If you partitioned by, say, timestamp instead,
-   a single user's notifications would be scattered across many partitions and
-   every read would have to gather results from all of them. That's called a
-   **scatter-gather** query; it's expensive and slow.
+Each shard operates independently. Adding a fourth shard roughly cuts each
+existing shard's load by a quarter — no coordination needed between shards
+during normal operation.
 
-User ID satisfies both properties for a notification system. It's the default
-choice you should reach for in an interview unless you have a specific reason
-not to.
+## Why user ID is the right partition key
+
+A good partition key needs two properties:
+
+1. **Even distribution.** Each partition gets roughly equal data and traffic.
+   Randomly generated user IDs (UUIDs, snowflake IDs) spread naturally.
+   Sequential IDs work too if you hash them first.
+
+2. **Query alignment.** Most notification reads are per-user: "give me this
+   user's last 50 notifications." With user ID as partition key, that query hits
+   exactly one shard. Partitioning by timestamp instead would scatter one user's
+   notifications across every shard, requiring expensive **scatter-gather**
+   queries that fan out to all shards and merge results — slow and wasteful.
+
+## Partition key routing: user ID to shard
+
+Here is the path a request takes from a user ID to the correct shard:
+
+```mermaid
+flowchart TD
+    A[Incoming request: user-4829] --> B[Hash function]
+    B --> C[Hash value: 7302]
+    C --> D[Modulo N shards: 7302 mod 3 = 0]
+    D --> E[Route to Shard 0]
+    E --> F[Read or write user-4829 notifications]
+```
+
+The hash converts the user ID into a large integer. Modulo N maps that integer
+to one of N shards. This is fast and simple — but breaks badly when N changes.
+If you grow from 3 shards to 4, almost every key maps to a different shard,
+forcing a near-total data migration. That is the problem consistent hashing
+solves.
 
 ## Consistent hashing
 
-Suppose you have N shards. The simplest partition rule is `shard = hash(userID)
-% N`. This works — until you need to add or remove a shard. Change N and almost
-every user's hash maps to a different shard, which means you'd need to move
-almost all the data. At scale, that kind of bulk migration can take hours or
-days and is dangerously disruptive.
+Consistent hashing pictures the hash output range (say 0 to 2^32) as a circle —
+the **hash ring**. Each shard sits at one or more points on that ring. To find
+a user's shard, hash the user ID to a point on the ring and walk clockwise until
+you reach the first shard.
 
-**Consistent hashing** solves this. Picture the output range of your hash
-function as a circle (0 at the top, max value going clockwise, wrapping back
-to 0). Place each shard at a point on the circle. To find a user's shard, hash
-the user ID to a point on the circle and walk clockwise until you hit the
-first shard. That shard owns the user.
+```mermaid
+flowchart TD
+    subgraph Hash Ring clockwise
+        TOP[Position 0] --> A[Shard A: position 90]
+        A --> B[Shard B: position 180]
+        B --> C[Shard C: position 270]
+        C --> TOP
+    end
+    U1[user-1234 hashes to 50] -.->|walks to| A
+    U2[user-5678 hashes to 200] -.->|walks to| C
+    U3[user-9012 hashes to 140] -.->|walks to| B
+```
 
-When you add a new shard, you place it on the circle and it takes over only
-the portion of the ring between itself and the previous shard. The other
-shards don't move. Roughly 1/N of keys migrate instead of nearly all of them.
-Removing a shard works the same way in reverse — only that shard's keys move
-to the next shard clockwise.
+**Adding a shard.** Say a new Shard D is inserted at position 130. It takes over
+the arc from 90 to 130, which previously belonged to Shard B. Only the keys in
+that arc migrate — roughly 1/N of all keys, not nearly all of them as with
+modulo hashing.
 
-In practice, each physical shard is assigned multiple points on the ring
-(called **virtual nodes**) to smooth out uneven distribution. Most distributed
-databases and message brokers (Cassandra, DynamoDB, Kafka) use some variant of
-consistent hashing internally, so you rarely implement it from scratch — but
-you need to understand the concept because interviewers expect you to explain
-why simple modulo hashing breaks and consistent hashing doesn't.
+**Removing a shard.** If Shard B is removed, its arc is absorbed by the next
+shard clockwise. Again, only that shard's keys move.
 
-## How this connects to notification architecture
+In practice, each physical shard gets several points on the ring called
+**virtual nodes**. More virtual nodes per shard means smoother distribution
+across the ring. Cassandra, DynamoDB, and Kafka all use consistent hashing
+internally. You rarely implement it from scratch, but interviewers expect you to
+explain why modulo hashing breaks and why consistent hashing does not.
 
-Sharding shows up in at least two places in the notification system:
+## Where sharding appears in notification architecture
 
-1. **The notification store.** Whether you use a relational database or a
-   NoSQL store, the table that holds "user X has notifications Y, Z, …" gets
-   sharded by user ID. This keeps per-user reads fast and distributes write
-   load across machines.
+**Notification store.** The table holding each user's notification history gets
+sharded by user ID. Per-user inbox reads touch exactly one shard. Write load
+distributes evenly across all shards.
 
-2. **Message broker partitions.** Kafka topics (or similar) are split into
-   partitions. Producers hash the user ID to pick a partition, and each
-   partition is consumed by exactly one consumer in a consumer group. This
-   means all notifications for a given user flow through the same consumer in
-   order — which matters for things like badge-count accuracy and
-   deduplication.
+**Message broker partitions.** Kafka topics split into partitions and producers
+hash the user ID to pick one. Each partition is consumed by exactly one consumer
+in a consumer group, so all notifications for a given user flow through the same
+consumer in order. Order matters for badge-count accuracy and deduplication.
 
-In both cases the partition key is user ID, and the goal is the same: spread
-load evenly, keep per-user data together, and make it possible to scale out
-by adding shards or partitions without rebuilding everything.
+## Pitfalls to know
 
-## Potential pitfalls
+- **Hot partitions.** A celebrity account or a bot receiving millions of
+  notifications concentrates traffic on one shard. Mitigations: rate limiting,
+  separate handling for flagged accounts, or sub-sharding hot keys.
 
-- **Hot partitions.** If one user receives vastly more notifications than
-  others (a celebrity account, a bot, a system alert), that user's partition
-  becomes a hot spot. This is the celebrity / hot-key problem from Lesson 5 —
-  sharding alone doesn't solve it. You still need the mitigation strategies
-  discussed there (splitting hot keys, rate limiting, separate handling).
+- **Cross-partition queries.** "Show all notifications sent in the last hour
+  across all users" requires querying every shard and merging results. Solution:
+  stream events to a dedicated analytics store built for full scans.
 
-- **Cross-partition queries.** "Show me all notifications sent in the last
-  hour across all users" now requires querying every partition. These
-  analytics-style queries are expensive on a sharded system. The common
-  solution is to stream events to a separate analytics store (like a data
-  warehouse) that's optimized for full scans.
-
-- **Rebalancing cost.** Even with consistent hashing, adding or removing
-  shards requires migrating data. Plan for this to happen in the background
-  with the system still serving traffic — never as a stop-the-world
-  operation.
+- **Rebalancing cost.** Even consistent hashing requires moving data when shards
+  change. This must happen in the background while traffic continues — never as a
+  stop-the-world operation.
 
 ## Recap
 
-- One database or queue can't handle notification traffic for hundreds of
-  millions of users; you split data into **partitions** (logical slices) spread
-  across **shards** (physical machines).
-- The **partition key** — almost always user ID for notifications — determines
-  which shard owns a piece of data.
-- **Consistent hashing** maps keys to shards using a ring so that adding or
-  removing a shard only moves ~1/N of the data instead of nearly all of it.
-- Sharding applies to both the notification database and the message broker
-  partitions.
+- One database cannot handle notification traffic at scale. Split data into
+  **partitions** spread across **shards**.
+- The **partition key** — almost always user ID — determines which shard owns a
+  record. User ID gives even distribution and aligns with the most common query
+  pattern.
+- Simple modulo hashing fails when shard count changes.
+  **Consistent hashing** uses a ring so only ~1/N of keys migrate when the
+  cluster grows or shrinks.
+- Sharding applies to both the notification database and the Kafka topic
+  partitions that feed it.
 
 ## Check yourself
 
-1. You're designing the notification store for a 200-million-user app. A
-   teammate suggests partitioning by notification creation timestamp instead
-   of user ID. What problems would that cause for the most common query
-   ("fetch my unread notifications")?
+1. A teammate suggests partitioning notifications by creation timestamp instead
+   of user ID. What problems would that cause for the query "fetch my unread
+   notifications"?
 
-2. Your system currently has 12 Kafka partitions for the notification topic.
-   Traffic has doubled and you need to add 4 more partitions. Explain why
-   simple `hash(userID) % N` would be disruptive here and how consistent
-   hashing reduces the blast radius.
+2. Your system has 12 Kafka partitions and traffic has doubled. You want 4 more.
+   Explain why `hash(userID) % N` would be disruptive and how consistent hashing
+   reduces the blast radius.
+
+3. Draw the consistent hashing ring with three shards. A fourth shard is added
+   between Shard A and Shard B. Which keys move, and which stay put?

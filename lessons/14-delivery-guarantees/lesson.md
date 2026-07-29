@@ -11,6 +11,13 @@ Understanding the three delivery contracts — and knowing which one real system
 actually use — is essential for designing a notification pipeline that behaves
 correctly under failure.
 
+## New terms
+
+- **At-most-once** — delivered zero or one times; never duplicated, but may be lost.
+- **At-least-once** — guaranteed to arrive, but may arrive more than once.
+- **Exactly-once** — arrives precisely one time; achieved in practice by combining at-least-once delivery with idempotent consumers.
+- **Acknowledgment (ack)** — a signal the consumer sends back to the broker confirming a message was successfully processed.
+
 ## The three delivery contracts
 
 When a broker (like Kafka or RabbitMQ) accepts a message from a producer and
@@ -32,76 +39,136 @@ gap in data doesn't matter. For notifications, at-most-once is almost never
 acceptable. A user who never receives a "your flight is delayed" alert has a
 real problem.
 
+```mermaid
+sequenceDiagram
+    participant P as Producer
+    participant B as Broker
+    participant C as Consumer
+
+    P->>B: Send message
+    B->>C: Deliver message
+    Note over B: Broker forgets message immediately
+    Note over C: Consumer crashes here
+    Note over B,C: No retry. Message lost if delivery fails.
+```
+
 ### At-least-once
 
 **At-least-once** means: the message is guaranteed to arrive, but it might
 arrive more than once. The broker keeps the message around and retries
-delivery until the consumer confirms receipt. If something fails before that
-confirmation happens, the broker sends the message again — even if the
-consumer actually processed it but crashed before confirming.
+delivery until the consumer confirms receipt with an ack. If something fails
+before that confirmation arrives, the broker sends the message again — even if
+the consumer already processed it but crashed before acking.
 
 Analogy: sending a registered letter. The post office keeps trying to deliver
-it until someone signs for it. If the signature slip gets lost in the mail,
-they deliver the letter again — so you might get two copies, but you
-definitely get at least one.
+it until someone signs for it. If the signature slip gets lost, they deliver
+the letter again — so you might get two copies, but you definitely get at
+least one.
 
 This is the most common guarantee in real-world notification systems. Losing
-a message is unacceptable, and duplicates can be handled separately (we
-covered how in Lesson 12 on idempotency and deduplication).
+a message is unacceptable, and duplicates can be handled separately with
+idempotency (covered in Lesson 12).
+
+```mermaid
+sequenceDiagram
+    participant P as Producer
+    participant B as Broker
+    participant C as Consumer
+
+    P->>B: Send message
+    B->>C: Deliver message
+    C->>C: Process message
+    C--xB: Ack lost in network
+    Note over B: No ack received. Retry.
+    B->>C: Re-deliver same message
+    C->>C: Process message again (duplicate)
+    C->>B: Ack
+    Note over B,C: Message delivered twice. Never lost.
+```
 
 ### Exactly-once
 
-**Exactly-once** means: every message is delivered precisely one time — no
-losses, no duplicates. This sounds ideal, and it is. The catch: true
-exactly-once delivery from the broker alone is extremely difficult (some
-would say impossible) in a distributed system, because you can never be 100%
-sure whether a consumer processed a message or not when a network failure
-happens between processing and confirmation.
+**Exactly-once** means every message is delivered precisely one time — no
+losses, no duplicates. This sounds ideal. The catch: true exactly-once
+delivery from the broker alone is extremely difficult in a distributed system,
+because you can never be certain whether a consumer processed a message when
+a network failure happens between processing and acking.
 
-In practice, systems that claim "exactly-once" are almost always doing
-**at-least-once delivery combined with idempotent processing** on the
-consumer side. The broker retries to prevent loss; the consumer deduplicates
-to prevent duplicates. Together, these two mechanisms produce
-exactly-once *semantics* — the end result looks the same as if each message
-was delivered exactly once, even though under the hood messages may have been
-sent multiple times.
+In practice, systems that achieve "exactly-once" combine **at-least-once
+delivery with idempotent processing** on the consumer side. The broker retries
+to prevent loss; the consumer deduplicates to prevent duplicates. Together,
+these produce exactly-once *semantics* — the end result looks the same as if
+each message arrived exactly once, even though messages may have been sent
+multiple times under the hood.
 
-This is exactly the pattern from Lesson 12: store a unique message ID before
-processing, and skip any message whose ID you've already seen.
+This is the pattern from Lesson 12: store a unique message ID before
+processing, and skip any message whose ID you have already seen.
+
+```mermaid
+sequenceDiagram
+    participant B as Broker
+    participant C as Consumer
+    participant DB as Idempotency Store
+
+    B->>C: Deliver message (id=abc)
+    C->>DB: Check: seen id=abc before?
+    DB-->>C: No
+    C->>C: Process message
+    C->>DB: Store id=abc
+    C->>B: Ack
+    Note over B: Ack lost. Retry.
+    B->>C: Re-deliver message (id=abc)
+    C->>DB: Check: seen id=abc before?
+    DB-->>C: Yes
+    C->>C: Skip processing
+    C->>B: Ack
+    Note over B,C: At-least-once + idempotency = exactly-once semantics
+```
 
 ## Acknowledgment (ack)
 
 The mechanism that makes at-least-once work is **acknowledgment**, or
 **ack** for short. An ack is a signal the consumer sends back to the broker
-that says "I successfully processed this message — you can stop holding onto
-it."
+meaning "I successfully processed this message — you can stop holding onto it."
 
-Here is the typical flow:
+Here is the typical ack flow in a Kafka-style system:
 
 1. Broker delivers a message to the consumer.
-2. Consumer processes the message (e.g., calls the push notification
-   provider, writes to the database).
+2. Consumer processes the message (e.g., calls the push notification provider).
 3. Consumer sends an ack back to the broker.
-4. Broker marks the message as done and removes it from the queue (or
-   advances the consumer's offset in a log-based system like Kafka).
+4. Broker advances the consumer's offset — it will not re-deliver that message.
 
 If the broker never receives the ack — because the consumer crashed, the
 network dropped, or processing timed out — it assumes delivery failed and
-re-delivers the message to the same or a different consumer.
+re-delivers the message.
+
+```mermaid
+sequenceDiagram
+    participant B as Broker
+    participant C as Consumer
+    participant APNs as Push Provider
+
+    B->>C: Deliver message (offset 42)
+    C->>APNs: Send push notification
+    APNs-->>C: 200 OK
+    C->>B: Ack (commit offset 42)
+    Note over B: Advance offset to 43
+    B->>C: Deliver next message (offset 43)
+```
 
 ### When to ack: before or after processing?
 
-This is the key trade-off:
+This timing question determines which guarantee you get:
 
-- **Ack before processing** (sometimes called "auto-ack"): the consumer acks
-  as soon as it receives the message, before doing any work. If the consumer
-  then crashes during processing, the message is lost — the broker already
-  thinks it was handled. This gives you **at-most-once**.
+- **Ack before processing** (auto-ack): consumer acks as soon as it receives
+  the message, before doing any work. If the consumer then crashes during
+  processing, the message is lost — the broker already thinks it was handled.
+  Result: **at-most-once**.
 
-- **Ack after processing**: the consumer acks only after it finishes all
-  work. If the consumer crashes mid-processing, the broker re-delivers. This
-  gives you **at-least-once** — but the re-delivered message might get
-  processed a second time, producing a duplicate.
+- **Ack after processing**: consumer acks only after finishing all work. If
+  the consumer crashes mid-processing, the broker re-delivers. The re-delivered
+  message might get processed a second time, producing a duplicate.
+  Result: **at-least-once**.
 
 For notification systems, ack-after-processing is the standard choice. You
 accept the possibility of occasional duplicates and rely on idempotency to
@@ -114,7 +181,7 @@ into a message broker (Lesson 6), then out to channel-specific workers
 (push, SMS, email). Each worker is a consumer. The delivery guarantee is
 configured at the broker-consumer boundary:
 
-- The broker retains messages until workers ack (at-least-once).
+- Broker retains messages until workers ack (at-least-once).
 - Workers deduplicate using an idempotency key (Lesson 12), achieving
   exactly-once semantics.
 - If a worker crashes or is slow, backpressure mechanisms (Lesson 13) limit
@@ -145,3 +212,6 @@ single layer solves the whole problem; the layers compose.
 2. Your team is designing a new analytics event pipeline where losing 0.1%
    of events is acceptable but duplicates would corrupt your metrics. Which
    delivery guarantee would you choose, and why?
+
+3. What is the difference between "exactly-once delivery" and "exactly-once
+   semantics"? Why does the distinction matter in practice?
