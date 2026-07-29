@@ -1,5 +1,5 @@
 {
-  "last_sent_lesson": 4,
+  "last_sent_lesson": 5,
   "sent_history": [
     {
       "num": 1,
@@ -16,6 +16,10 @@
     {
       "num": 4,
       "slug": "04-fanout-write-vs-read"
+    },
+    {
+      "num": 5,
+      "slug": "05-celebrity-problem-hot-keys"
     }
   ]
 }
