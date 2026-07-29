@@ -1,5 +1,5 @@
 {
-  "last_sent_lesson": 2,
+  "last_sent_lesson": 3,
   "sent_history": [
     {
       "num": 1,
@@ -8,6 +8,10 @@
     {
       "num": 2,
       "slug": "02-high-level-architecture"
+    },
+    {
+      "num": 3,
+      "slug": "03-channels-and-priority-tiers"
     }
   ]
 }

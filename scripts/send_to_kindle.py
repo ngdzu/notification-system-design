@@ -8,21 +8,18 @@ Can run locally or automatically in GitHub Actions (with laptop turned off).
 Features:
 1. Tracks progress via .kindle_state.json.
 2. Converts lesson Markdown files to EPUB using Pandoc (with optional Mermaid filter for visual diagrams).
-3. If next lesson file is missing and GEMINI_API_KEY is present, auto-generates the lesson according to AGENTS.md rules.
-4. Emails the EPUB attachment to Kindle via SMTP (Gmail).
+3. Emails the EPUB attachment to Kindle via SMTP (Gmail).
 5. Updates .kindle_state.json (which GitHub Actions commits back to GitHub).
 """
 
 import os
 import sys
-import re
 import glob
 import json
 import shutil
 import argparse
 import subprocess
 import smtplib
-import urllib.request
 from email.mime.multipart import MIMEMultipart
 from email.mime.base import MIMEBase
 from email.mime.text import MIMEText
@@ -32,8 +29,6 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 os.environ["MERMAID_FILTER_PUPPETEER_CONFIG"] = os.path.join(REPO_ROOT, "puppeteer-config.json")
 STATE_FILE = os.path.join(REPO_ROOT, ".kindle_state.json")
 LESSONS_DIR = os.path.join(REPO_ROOT, "lessons")
-PLAN_FILE = os.path.join(REPO_ROOT, ".plan", "plan.md")
-AGENTS_FILE = os.path.join(REPO_ROOT, "AGENTS.md")
 
 LESSON_SLUGS = {
     1: "01-push-vs-pull-vs-poll",
@@ -71,53 +66,6 @@ def save_state(state):
         json.dump(state, f, indent=2)
 
 
-def get_plan_excerpt_for_lesson(num):
-    if not os.path.exists(PLAN_FILE):
-        return f"Lesson {num}"
-    with open(PLAN_FILE, "r") as f:
-        content = f.read()
-    pattern = rf"(### Lesson {num}\b.*?)(?=### Lesson \d+|\Z)"
-    match = re.search(pattern, content, re.DOTALL)
-    if match:
-        return match.group(1).strip()
-    return f"Lesson {num}"
-
-
-def generate_lesson_with_gemini(num, slug, api_key):
-    """Uses Gemini REST API to generate a lesson if it doesn't exist yet."""
-    plan_excerpt = get_plan_excerpt_for_lesson(num)
-    prompt = f"""
-You are an expert system design educator writing a lesson for a course on "Notification Systems at Scale (100M+ users)".
-Follow these strict rules from AGENTS.md:
-- Target length: ~700-1200 words (5-10 minute read).
-- Beginner-friendly: define every technical term inline at first use.
-- Structure: brief hook -> core explanation with real-world analogy -> architecture connection -> recap -> 1-2 check-yourself questions.
-- Include a Mermaid diagram (```mermaid ... ```) illustrating the main architecture/workflow of the lesson.
-- Subject matter plan excerpt:
-{plan_excerpt}
-
-Write the full lesson in clean Markdown format starting with `# Lesson {num} - ...`.
-Do not include extra wrapper markdown or conversational text outside the markdown content.
-"""
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}"
-    payload = {
-        "contents": [{"parts": [{"text": prompt}]}]
-    }
-    data = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
-    
-    print(f"Calling Gemini API to generate Lesson {num} ({slug})...")
-    with urllib.request.urlopen(req) as resp:
-        res_data = json.loads(resp.read().decode("utf-8"))
-        text = res_data["candidates"][0]["content"]["parts"][0]["text"]
-
-    folder_path = os.path.join(LESSONS_DIR, slug)
-    os.makedirs(folder_path, exist_ok=True)
-    md_path = os.path.join(folder_path, "lesson.md")
-    with open(md_path, "w") as f:
-        f.write(text.strip() + "\n")
-    print(f"Generated and saved new lesson to {md_path}")
-    return md_path
 
 
 def convert_to_epub(md_file, title, output_epub_path):
@@ -195,13 +143,8 @@ def main():
     slug = LESSON_SLUGS.get(target_num, f"{target_num:02d}-lesson")
     md_file = os.path.join(LESSONS_DIR, slug, "lesson.md")
 
-    # If lesson.md does not exist, check if we can auto-generate via Gemini API
     if not os.path.exists(md_file):
-        api_key = os.environ.get("GEMINI_API_KEY")
-        if api_key:
-            md_file = generate_lesson_with_gemini(target_num, slug, api_key)
-        else:
-            sys.exit(f"Lesson {target_num} ({md_file}) does not exist yet. Add GEMINI_API_KEY to secrets to auto-generate missing lessons on cloud.")
+        sys.exit(f"Lesson {target_num} ({md_file}) does not exist yet. All lessons must be pre-generated and committed to the repository.")
 
     lesson_title = f"Lesson {target_num:02d}: {slug.replace('-', ' ').title()}"
     output_epub = os.path.join("/tmp", f"{slug}.epub")
