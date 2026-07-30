@@ -1,5 +1,5 @@
 {
-  "last_sent_lesson": 10,
+  "last_sent_lesson": 11,
   "sent_history": [
     {
       "num": 1,
@@ -40,6 +40,10 @@
     {
       "num": 10,
       "slug": "10-pull-fallback"
+    },
+    {
+      "num": 11,
+      "slug": "11-replay-buffers"
     }
   ]
 }
