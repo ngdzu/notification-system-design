@@ -1,5 +1,5 @@
 {
-  "last_sent_lesson": 8,
+  "last_sent_lesson": 9,
   "sent_history": [
     {
       "num": 1,
@@ -32,6 +32,10 @@
     {
       "num": 8,
       "slug": "08-push-delivery-mechanics"
+    },
+    {
+      "num": 9,
+      "slug": "09-connection-routing"
     }
   ]
 }
