@@ -1,5 +1,5 @@
 {
-  "last_sent_lesson": 7,
+  "last_sent_lesson": 8,
   "sent_history": [
     {
       "num": 1,
@@ -28,6 +28,10 @@
     {
       "num": 7,
       "slug": "07-sharding-and-partitioning"
+    },
+    {
+      "num": 8,
+      "slug": "08-push-delivery-mechanics"
     }
   ]
 }
