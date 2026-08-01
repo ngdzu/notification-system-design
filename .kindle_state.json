@@ -1,5 +1,5 @@
 {
-  "last_sent_lesson": 13,
+  "last_sent_lesson": 14,
   "sent_history": [
     {
       "num": 1,
@@ -52,6 +52,10 @@
     {
       "num": 13,
       "slug": "13-backpressure-and-rate-limiting"
+    },
+    {
+      "num": 14,
+      "slug": "14-delivery-guarantees"
     }
   ]
 }
