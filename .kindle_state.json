@@ -1,5 +1,5 @@
 {
-  "last_sent_lesson": 14,
+  "last_sent_lesson": 15,
   "sent_history": [
     {
       "num": 1,
@@ -56,6 +56,10 @@
     {
       "num": 14,
       "slug": "14-delivery-guarantees"
+    },
+    {
+      "num": 15,
+      "slug": "15-monitoring-and-observability"
     }
   ]
 }
