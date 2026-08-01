@@ -1,5 +1,5 @@
 {
-  "last_sent_lesson": 15,
+  "last_sent_lesson": 16,
   "sent_history": [
     {
       "num": 1,
@@ -60,6 +60,10 @@
     {
       "num": 15,
       "slug": "15-monitoring-and-observability"
+    },
+    {
+      "num": 16,
+      "slug": "16-failure-recovery-and-dlqs"
     }
   ]
 }
