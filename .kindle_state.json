@@ -1,5 +1,5 @@
 {
-  "last_sent_lesson": 16,
+  "last_sent_lesson": 17,
   "sent_history": [
     {
       "num": 1,
@@ -64,6 +64,10 @@
     {
       "num": 16,
       "slug": "16-failure-recovery-and-dlqs"
+    },
+    {
+      "num": 17,
+      "slug": "17-capstone-walkthrough"
     }
   ]
 }
