@@ -60,8 +60,13 @@ beginner-friendly written lessons.
   and `<symbol>`s can't vary their text labels — which is why reuse is
   done with JS components instead.
 - `.claude/skills/` — the learning-loop skills (`lesson`, `ask`, `quiz`,
-  `review`, `progress`) that drive study sessions. See each `SKILL.md` for
-  its exact behavior.
+  `review`, `progress`, `handoff`) that drive study sessions. See each
+  `SKILL.md` for its exact behavior.
+- `.claude/handoff/HANDOFF.md` (created on demand by `/handoff`) — a
+  snapshot of the most recent session: what was covered, what changed, and
+  what to do next. Read it at the start of a new session to resume where
+  the last one left off. Superseded versions are archived under
+  `.claude/handoff/archive/`.
 
 ### Canonical lesson folder names
 
@@ -112,6 +117,9 @@ repetition (testing yourself beats re-reading):
    previously got wrong.
 5. `/progress` — check the dashboard for what's written, quizzed, mastered,
    and what to do next.
+6. `/handoff` (end of session, or whenever context might be lost) — write
+   `.claude/handoff/HANDOFF.md` summarizing what happened and what to do
+   next. Start the next session by reading it back.
 
 ## Writing a lesson
 

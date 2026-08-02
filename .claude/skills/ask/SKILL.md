@@ -15,21 +15,39 @@ away** — every one becomes a future test question via `/quiz` and `/review`.
    - Otherwise infer it from what's currently being discussed in the
      conversation (the most recently loaded/quizzed lesson).
    - If it's genuinely ambiguous, ask the user which lesson before answering.
-2. Answer the question directly, in the same beginner-friendly style as the
-   lessons: define any term you use that hasn't already been introduced,
-   use a concrete example or analogy where it helps, and keep the answer
-   self-contained (don't say "see above" — someone rereading only this Q&A
-   entry later, out of context, should fully understand it).
-3. Append the exchange to `lessons/NN-slug/qa.md` (create the file if it
-   doesn't exist yet), in this format:
+2. **Split the input into distinct questions first.** If the user asked more
+   than one question in a single `/ask` call (e.g. "where is X located? and
+   is Y talking about A or B in general?"), treat each as a separate
+   question — do not blend them into one merged answer. This applies even
+   when the questions are related or share context.
+3. Answer each question directly and separately, in the same
+   beginner-friendly style as the lessons: define any term you use that
+   hasn't already been introduced, use a concrete example or analogy where
+   it helps, and keep each answer self-contained (don't say "see above" —
+   someone rereading only that one Q&A entry later, out of context, should
+   fully understand it). An answer to question 2 may reference the answer to
+   question 1 by restating the relevant fact, not by pointing back to it.
+4. Append each question as its own entry to `lessons/NN-slug/qa.md` (create
+   the file if it doesn't exist yet), in this format — one `## Q<N>:` block
+   per question, even if they arrived in the same `/ask` call:
 
    ```
-   ## Q: <question as asked> (<YYYY-MM-DD>)
-   <full answer>
+   ## Q<N>: <question 1 as asked> (<YYYY-MM-DD>)
+   <full answer to question 1>
+
+   ## Q<N+1>: <question 2 as asked> (<YYYY-MM-DD>)
+   <full answer to question 2>
    ```
 
-4. If answering reveals the lesson file itself has a gap or error, say so
+   `<N>` is a running number, sequential within that lesson's `qa.md`,
+   never reused or reset. Before writing, scan the file for the highest
+   existing `## Q<N>:` and continue from there (start at `Q1` for a new
+   file). If the user's question references an earlier one by number (e.g.
+   "follow up to Q3" or just "Q3"), treat it as a follow-up to that exact
+   entry: read it for context and make the new answer build on it rather
+   than re-deriving everything from scratch.
+5. If answering reveals the lesson file itself has a gap or error, say so
    out loud to the user, but don't edit `lessons/NN-slug/lesson.md` unless
    they ask you to.
-5. Do not quiz the user back in this skill — just answer. Testing happens in
+6. Do not quiz the user back in this skill — just answer. Testing happens in
    `/quiz` and `/review`, using this log as material.

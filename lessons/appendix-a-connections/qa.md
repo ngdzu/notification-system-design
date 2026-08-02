@@ -1,6 +1,6 @@
 # Q&A Log — Appendix A: Anatomy of a Connection
 
-## Q: Is it true that each browser tab opens a unique OS-assigned source port for each connection? It sounds like every connection requires a new port — does the browser open a new port every time we open a URL in a different tab? (2026-07-11)
+## Q1: Is it true that each browser tab opens a unique OS-assigned source port for each connection? It sounds like every connection requires a new port — does the browser open a new port every time we open a URL in a different tab? (2026-07-11)
 
 Yes — this is standard TCP/OS behavior, not a browser-specific trick.
 
@@ -12,7 +12,7 @@ Yes — this is standard TCP/OS behavior, not a browser-specific trick.
 
 **Important nuance — it's "new connection → new port," not "new request → new port":** HTTP/1.1 and HTTP/2 typically reuse a single TCP connection for multiple requests (keep-alive for HTTP/1.1, multiplexing for HTTP/2) rather than opening a fresh socket per request. So a single tab loading a page with 50 resources from the same origin usually reuses one connection (one port), not 50 separate ones. The "new port" only happens when a genuinely new connection is opened — e.g., a new tab to the same site, or a connection to a different origin.
 
-## Q: Is a socket created every time there is a connection? When a socket is created, is a port always assigned? Does SSH follow the same principle — create a socket, assign a source port? (2026-07-11)
+## Q2: Is a socket created every time there is a connection? When a socket is created, is a port always assigned? Does SSH follow the same principle — create a socket, assign a source port? (2026-07-11)
 
 **Is a socket created every time there is a connection?** Yes, at the TCP layer specifically. A **socket** is a kernel data structure (the kernel is the core of the operating system) that represents one endpoint of a connection and holds its state — the 4-tuple identity, sequence numbers, and send/receive buffers (see the main lesson.md for details). Every time a new TCP connection is established — via the three-message handshake — the kernel allocates a fresh socket on each end to track it. This is true regardless of what's riding on top of that TCP connection: a browser tab, an SSH session, a WebSocket, an HTTP/2 multiplexed set of streams — all of them sit on exactly one TCP connection, and therefore exactly one socket per end, no matter how much application-level activity happens inside it.
 
@@ -22,7 +22,7 @@ The distinction worth holding onto: **"connection" at the TCP layer is 1:1 with 
 
 **Does SSH follow the same principle?** Yes, exactly. SSH is "its own encrypted protocol on TCP" (see [protocol-stack](protocol-stack.md)) — meaning an SSH session is just a regular TCP connection underneath, with SSH's own encryption and multiplexing layered on top, the same way HTTPS layers TLS+HTTP on TCP. When you run `ssh user@host`, your machine opens a normal TCP connection: the OS assigns your machine an ephemeral source port (e.g., `54321`), and the destination is the server's IP on port 22 (SSH's well-known port). The kernel creates a socket on each end exactly as it would for a browser connecting to YouTube on port 443 — same mechanism, same rules, just a different destination port and a different application protocol running on top. If you open two simultaneous SSH connections to two different servers (or even the same server twice), each gets its own ephemeral source port and its own socket, for the same "4-tuple must be unique" reason described above.
 
-## Q: What is a TCP connection, and what are non-TCP connections? Which ones open a socket, and which ones don't? (2026-07-11)
+## Q3: What is a TCP connection, and what are non-TCP connections? Which ones open a socket, and which ones don't? (2026-07-11)
 
 **TCP connection:** TCP (Transmission Control Protocol) is the internet's standard *reliable, connection-oriented* transport protocol. "Connection-oriented" means before any data flows, both sides do a **three-message handshake** ("can we talk?" / "yes, can you hear me?" / "yes") and then each side allocates a **socket** — a kernel data structure that tracks the connection's state: the 4-tuple identity, sequence numbers (which bytes have been sent/acked, so lost or out-of-order packets can be detected and retried), and send/receive buffers. This bookkeeping is what makes TCP *reliable* — it guarantees your bytes arrive, in order, or the connection reports failure. Almost everything discussed in this appendix — HTTPS, SSH, WebSocket — is built on top of a TCP connection.
 
@@ -36,7 +36,7 @@ So the accurate framing is: **UDP is "connectionless" in the sense of having no 
 
 **One more wrinkle worth knowing (from [protocol-stack](protocol-stack.md)):** QUIC (which powers HTTP/3) runs on top of UDP but rebuilds TCP's ideas — reliable delivery, ordered streams, encryption — at a layer above the raw UDP socket, inside the QUIC library/implementation itself rather than in the kernel. This proves the deeper point the whole appendix makes: "a connection is just state and rules" — you can build TCP-like guarantees on any transport, including one (UDP) that has no such guarantees built in.
 
-## Q: Then what kind of "connection" doesn't open a socket? (2026-07-11)
+## Q4: Then what kind of "connection" doesn't open a socket? (2026-07-11)
 
 Good follow-up — the previous answer was a bit misleading by implying "socket vs. no socket" was the real dividing line. Here's the more precise picture.
 
@@ -50,7 +50,7 @@ So where does a "connection" genuinely *not* open a socket? Two real cases:
 
 **The takeaway:** within IP networking (which is everything this appendix is about — the internet, HTTP, SSH, WebSocket), sockets are universal — every TCP or UDP endpoint has one. The real fork isn't "socket vs. no socket," it's "one socket carrying one thing" (a plain TCP or UDP connection) vs. "one socket carrying many multiplexed logical things" (HTTP/2 streams, SSH channels) vs. "not IP networking at all" (USB, Bluetooth, serial).
 
-## Q: Can socket() be called but there's no port or address (yet)? (2026-07-11)
+## Q5: Can socket() be called but there's no port or address (yet)? (2026-07-11)
 
 Yes — this is actually the normal sequence, not an edge case. Creating a socket and assigning it a port/address are **two separate steps**, and there's always a brief moment between them (even if it's microseconds and hidden inside a library call) where a socket exists with no address or port attached yet.
 
@@ -66,7 +66,7 @@ So for the common client case (e.g., a browser opening a tab, discussed earlier 
 
 For UDP it's similar but looser: you can `socket()` and then immediately start calling `sendto()` (send a datagram to some destination) without ever calling `bind()` — the kernel will auto-assign an ephemeral local port on the first send, since a return address is still needed even for a "connectionless" protocol. So yes: a socket with no port/address is a real, normal, if usually momentary, state — it's the starting point every socket passes through before it becomes useful.
 
-## Q: Talking about multiplexing — why don't two browser tabs use the same source port and multiplex, the way you said 5 SSH connections can multiplex over one source port? What's the actual difference between those two cases? (2026-07-11)
+## Q6: Talking about multiplexing — why don't two browser tabs use the same source port and multiplex, the way you said 5 SSH connections can multiplex over one source port? What's the actual difference between those two cases? (2026-07-11)
 
 First, a correction to tighten up an earlier answer: saying "5 SSH connections multiplex over one source port" was imprecise, and the imprecision is exactly what's causing the confusion — so let's fix it, because the fix *is* the answer.
 
